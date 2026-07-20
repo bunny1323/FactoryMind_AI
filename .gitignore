@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+venv/
+jobs.db
+*.db
+.next/
+node_modules/
+.env.local
+
+backend/credentials/
+credentials/

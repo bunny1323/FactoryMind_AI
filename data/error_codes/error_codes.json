@@ -1,0 +1,17 @@
+[
+  {
+    "code": "E-VIB01",
+    "cause": "Main hydraulic pump rotational vibration exceeds standard tolerance (0.15 mm peak-to-peak). Typically caused by shaft misalignment, worn coupling insert, or pump mount bolt looseness.",
+    "solution": "1. Measure shaft alignment with laser tool.\n2. Inspect coupling insert and replace if cracked.\n3. Check mount bolts and torque to 145 Nm."
+  },
+  {
+    "code": "E-BRG02",
+    "cause": "Slewing ring turntable bearing radial wear exceeds limit (1.5 mm). Usually caused by fatigue, lubrication failure (dry races), or metal spalling.",
+    "solution": "1. Run grease sample analysis to inspect for metal chips.\n2. Check radial clearance using dial gauge.\n3. Perform SOP-MNT-R215-087 to replace bearings."
+  },
+  {
+    "code": "E-TEMP03",
+    "cause": "Pump casing operating temperature exceeds threshold (355 K / 82°C). Caused by excessive friction due to bearing degradation, oil starvation, or high load.",
+    "solution": "1. Check hydraulic oil level and oil cooler fan operation.\n2. Verify bearing wear status and shaft torque.\n3. Stop operation if temperature continues to rise."
+  }
+]

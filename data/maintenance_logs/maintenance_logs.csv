@@ -1,0 +1,6 @@
+MachineID,Date,Issue,Action,DowntimeHours
+M101,2026-01-15,Hydraulic pump temperature high (358 K),Cleaned hydraulic radiator and replaced hydraulic oil filters,3.5
+M101,2026-03-22,Minor hydraulic pump casing vibration (0.11 mm),Inspected coupling and tightened engine-pump flange mounting bolts,2.0
+M102,2026-04-10,Boom cylinder seal leak,Replaced boom cylinder seal kit and refilled hydraulic fluid,4.0
+M101,2026-05-12,Vibration alarm E-VIB01 triggered on main pump,Inspected mounting brackets and aligned pump shaft to engine flywheel,5.0
+M103,2026-06-01,Slew motor hydraulic leak,Replaced motor pressure seals and gear oil,3.0

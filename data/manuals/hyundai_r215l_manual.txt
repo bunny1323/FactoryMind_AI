@@ -1,0 +1,33 @@
+HYUNDAI R215L CRAWLER EXCAVATOR SERVICE MANUAL
+================================================
+
+SECTION 1: SYSTEM OVERVIEW
+The Hyundai R215L is powered by a Cummins 6BTAA5.9 engine delivering 148 HP. The hydraulic system utilizes dual variable-displacement axial piston pumps and an open-center control system. Under standard operations, vibrations must be monitored regularly across structural and hydraulic components to ensure pump integrity.
+
+SECTION 2: HYDRAULIC PUMP ASSEMBLY & SPECIFICATIONS
+The main pump package (Kawasaki K3V112DT) is coupled directly to the flywheel.
+- Operating Pressure: 34.3 MPa (350 kgf/cm2)
+- Flow Rate: 2 x 220 L/min
+- Spindle/Shaft Rotational Speed Range: 1000 to 2200 RPM
+- Allowable Vibration Amplitude (Normal): < 0.05 mm (Peak-to-Peak)
+- Warning Vibration Level (Action Required): 0.15 mm
+- Critical Vibration Level (Immediate Shutdown): > 0.30 mm
+
+SECTION 3: SLEWING SYSTEM & TURNTABLE BEARING
+The slewing bearing (swing circle) consists of a single-row ball bearing with internal gear teeth. 
+Vibration in the upper structure during slewing is commonly caused by:
+1. Eccentric gear wear or misalignment.
+2. Slewing ring bearing race damage or ball fatigue.
+3. Lack of proper EP2 lithium grease lubrication.
+
+SECTION 4: DIAGNOSTICS & TROUBLESHOOTING
+4.1 EXCESSIVE STRUCTURAL VIBRATION
+Vibration at the main pump housing or turntable assembly indicates bearing degradation or coupling alignment failure.
+- Step 1: Measure vibration amplitude at pump casing using a magnetic accelerometer.
+- Step 2: If vibration exceeds 0.15 mm, check for bearing clearance. The radial and axial play of the slewing ring must not exceed 1.5 mm.
+- Step 3: Inspect the coupling insert between the engine flywheel and pump shaft. A worn coupling insert causes severe torsional vibration.
+- Step 4: Examine spare parts inventory for Slewing Bearing Kits (Part ID: SP-BRG-215) and Couplings (Part ID: SP-CPL-332).
+
+4.2 BEARING FATIGUE AND WEAR INDICATORS
+High rotational vibration paired with localized heat dissipation (> 355 K / 82°C) is a primary indicator of bearing race spalling or ball cage damage. Continued operation will lead to cataclysmic pump shaft lock-up or turntable failure.
+- Recommended Action: Schedule immediate bearing clearance inspection and grease analysis. Replace bearing elements if metal flakes are found.

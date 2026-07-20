@@ -1,0 +1,33 @@
+STANDARD OPERATING PROCEDURE: HYDRAULIC PUMP BEARING INSPECTION & REPLACEMENT
+Document ID: SOP-MNT-R215-087
+Target Family: Hyundai R215L Excavator
+Estimated Downtime: 6.5 Hours
+Required Tools: Dial Indicator, Hydraulic Jack, 24mm Torque Wrench, Shaft Alignment Laser, Accelerometer
+
+1. PREPARATION AND SAFETY
+- Park the excavator on level ground. Lower all attachments (boom, arm, bucket) to the ground.
+- Shut down the engine and lock out the hydraulic controls. Lock out the main electrical isolator.
+- Allow hydraulic oil temperature to drop below 40°C.
+- Relieve residual pressure in the hydraulic circuits by bleeding the accumulator.
+
+2. VIBRATION DIAGNOSIS & INSPECTION
+- Check pump shaft axial and radial play using a dial indicator. Normal axial play should be between 0.02 mm and 0.08 mm. Radial play should not exceed 0.12 mm.
+- Inspect the bearing casing for grease discoloration or metal shaving contamination.
+- If radial play exceeds 0.15 mm or shaft runout is detected, the main pump bearings must be replaced.
+
+3. REPLACEMENT PROCEDURE
+- Disconnect suction and delivery hoses from the main pump (Kawasaki K3V112DT). Cap all open lines to prevent dust ingress.
+- Support the pump weight using an overhead engine hoist or heavy-duty jack.
+- Remove the main pump mounting bolts (M16 flange bolts, 8 pieces).
+- Slide the pump assembly out of the engine flywheel housing.
+- Open the pump front housing to access the shaft bearings. Remove the retaining snap ring.
+- Using a bearing puller, extract the worn shaft bearing (part SP-BRG-215). Clean the housing socket.
+- Press-fit the new bearing (SP-BRG-215) using a hydraulic press tool. Apply lubrication grease.
+- Reassemble the pump casing and torque casing bolts to 85 Nm.
+- Mount the pump back to the flywheel. Use a laser alignment tool to align the pump shaft to the engine flywheel shaft. Runout tolerance must be < 0.05 mm.
+- Secure mounting bolts and torque to 145 Nm. Reconnect hydraulic lines.
+
+4. POST-REPLACEMENT CALIBRATION & VERIFICATION
+- Fill the pump housing with clean, filtered hydraulic oil (ISO VG 46).
+- Start the engine in low idle. Bleed air from the pump regulator plug.
+- Run engine at high idle (2000 RPM) and measure vibration. Ensure peak-to-peak amplitude is below 0.05 mm.

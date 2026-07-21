@@ -47,6 +47,6 @@ def build_reranker(backend: str = "cross_encoder", model_name: str = "BAAI/bge-r
     if backend == "cross_encoder":
         try:
             return CrossEncoderReranker(model_name)
-        except Exception:
-            logger.warning("CrossEncoder not available, using FallbackReranker.")
+        except Exception as e:
+            logger.warning(f"CrossEncoder not available, using FallbackReranker: {e}", exc_info=True)
     return FallbackReranker()

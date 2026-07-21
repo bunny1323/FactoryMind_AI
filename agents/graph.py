@@ -25,11 +25,14 @@ class AgentState(TypedDict):
 
 # --- Intent Detection Agent ---
 def intent_detection_agent(q: str) -> str | None:
-    """Classifies if query is a greeting or a maintenance question."""
-    q = q.lower().strip()
-    
-    # Dynamic document counting and listing check
-    if any(phrase in q for phrase in ["how many documents", "how many manuals", "list documents", "list manuals", "what documents", "what manuals", "number of manuals", "number of documents"]):
+    """Classifies if query is a greeting or a conversational FAQ — returns instant answer without RAG."""
+    q_lower = q.lower().strip()
+
+    # --- Dynamic document listing ---
+    if any(phrase in q_lower for phrase in [
+        "how many documents", "how many manuals", "list documents", "list manuals",
+        "what documents", "what manuals", "number of manuals", "number of documents"
+    ]):
         import os
         from backend.config import settings
         manuals_dir = os.path.join(settings.DATA_DIR, "manuals")
@@ -38,35 +41,56 @@ def intent_detection_agent(q: str) -> str | None:
             count = len(files)
             if count == 0:
                 return "I currently have 0 documents indexed in the knowledge base."
-            
-            file_list = "\n".join([f"- {f}" for f in files])
-            return f"I currently have {count} manuals indexed in the knowledge base:\n\n{file_list}"
+            file_list = "\n".join([f"- {f}" for f in sorted(files)])
+            return f"I currently have **{count} manuals** indexed in the knowledge base:\n\n{file_list}"
         return "The manuals directory is not configured."
 
+    # --- Machine / model FAQ ---
+    machine_keywords = [
+        "which machine", "what machine", "which excavator", "what excavator",
+        "which model", "what model", "which equipment", "what equipment",
+        "which vehicle", "what vehicle", "supported machine", "supported model",
+        "what do you support", "what machine do you support", "which machine do you support",
+        "machine do you", "what machines", "which machines"
+    ]
+    if any(kw in q_lower for kw in machine_keywords):
+        return (
+            "I support the **Hyundai R215L Smart Plus** crawler excavator.\n\n"
+            "My knowledge base includes service manuals, maintenance SOPs, error code tables, "
+            "spare parts catalogue, and maintenance logs specifically for this model.\n\n"
+            "**Tracked machines in this deployment:**\n"
+            "- **M101** — Primary R215L unit (active monitoring)\n"
+            "- **M102** — Secondary R215L unit\n"
+            "- **M103** — Tertiary R215L unit\n\n"
+            "Ask me anything about maintenance, fault diagnosis, hydraulic specs, or spare parts!"
+        )
+
+    # --- Greetings and conversational FAQs ---
     greetings = {
         "hi": "Hello! I am FactoryMind AI, your Explainable Multimodal Industrial Copilot for the Hyundai R215L excavator. How can I assist you with maintenance, diagnostics, or troubleshooting today?",
         "hello": "Hello! I am FactoryMind AI, your Explainable Multimodal Industrial Copilot for the Hyundai R215L excavator. How can I assist you with maintenance, diagnostics, or troubleshooting today?",
+        "hey": "Hello! I am FactoryMind AI. How can I assist you with the Hyundai R215L today?",
         "good morning": "Good morning! I am FactoryMind AI. Ready to assist with excavator maintenance, diagnostic checks, or spare parts lookup.",
+        "good afternoon": "Good afternoon! Ready to assist with excavator maintenance, fault diagnosis, or spare parts lookup.",
+        "good evening": "Good evening! Ready to assist with excavator maintenance, fault diagnosis, or spare parts lookup.",
         "how are you": "I am operating at peak efficiency, monitoring all telemetry streams. How can I help you troubleshoot or maintain the excavator today?",
         "thank you": "You're welcome! Let me know if you need any more manual citations, repair SOPs, or diagnostic assessments.",
         "thanks": "You're welcome! Let me know if you need any more manual citations, repair SOPs, or diagnostic assessments.",
         "who are you": "I am FactoryMind AI, an Explainable Multimodal Industrial Copilot powered by Layout-Aware Agentic RAG. I assist maintenance engineers with Hyundai R215L excavators by combining RAG manuals, telemetry prediction models, and knowledge graphs.",
+        "what are you": "I am FactoryMind AI — an AI-powered industrial maintenance copilot for the Hyundai R215L Smart Plus excavator. I combine vector search over indexed service manuals, XGBoost predictive failure detection, and a multi-agent RAG pipeline.",
         "help": "I can help you troubleshoot faults, search service manuals, lookup spare parts, retrieve step-by-step SOPs, and analyze telemetry. Try asking: 'Machine M101 is showing increased vibration. What should I do?'",
         "about": "FactoryMind AI is a premium Industry 4.0 copilot. I analyze structural/hydraulic sensor telemetry, query Neo4j knowledge graphs, and retrieve layout-aware manuals to deliver explainable, evidence-backed repair dispatch plans.",
-        "capabilities": "My capabilities include: 1. Layout-Aware Multimodal RAG (manuals, tables, diagrams). 2. Knowledge Graph query mapping. 3. Telemetry risk analysis (IoT pre-wired). 4. Automated PDF Maintenance Report generation.",
-        "introduce yourself": "Hello! I am FactoryMind AI, your Explainable Multimodal Industrial Copilot. I combine manuals, telemetry assessments, and component knowledge graphs under a multi-agent supervisor to assist you like an experienced maintenance engineer."
+        "capabilities": "My capabilities include:\n1. **Layout-Aware Multimodal RAG** (manuals, tables, diagrams)\n2. **Knowledge Graph** query mapping\n3. **Telemetry risk analysis** (XGBoost predictive failure model)\n4. **Automated PDF Maintenance Report** generation\n\nAsk me about hydraulic pressures, error codes, spare parts, or SOPs!",
+        "introduce yourself": "Hello! I am FactoryMind AI, your Explainable Multimodal Industrial Copilot. I combine manuals, telemetry assessments, and component knowledge graphs under a multi-agent supervisor to assist you like an experienced maintenance engineer.",
     }
-    
-    # Exact or starts/ends match
+
+    # Exact or prefix/suffix match
     for key, response in greetings.items():
-        if q == key or q.startswith(key + " ") or q.endswith(" " + key):
+        if q_lower == key or q_lower.startswith(key + " ") or q_lower.endswith(" " + key):
             return response
-            
-    # Substring matching for greetings
-    if q in ["hi", "hello", "hey", "help", "about", "capabilities"]:
-        return greetings[q]
-        
+
     return None
+
 
 def intent_detection_agent_node(state: AgentState) -> dict[str, Any]:
     """Node wrapper for the Intent Detection Agent."""
@@ -85,9 +109,15 @@ def supervisor_agent_node(state: AgentState) -> dict[str, Any]:
         "sub_agent_history": state["sub_agent_history"] + ["supervisor_agent"]
     }
 
+def has_visual_intent(query: str) -> bool:
+    q = query.lower()
+    keywords = ["show me", "what does", "look like", "diagram of", "picture of", "illustration", "see the figure", "show diagram", "schematic"]
+    return any(kw in q for kw in keywords)
+
 # --- Document Retrieval Agent ---
 def document_retrieval_agent_node(state: AgentState) -> dict[str, Any]:
     """Searches vector database (dense + sparse hybrid) and retrieves layout-aware chunks."""
+    import time
     logger.info("Executing Document Retrieval Agent...")
     query = state["query"]
     
@@ -96,14 +126,48 @@ def document_retrieval_agent_node(state: AgentState) -> dict[str, Any]:
         return {"retrieved_documents": [], "sub_agent_history": state["sub_agent_history"] + ["document_retrieval_agent"]}
         
     # Search all collections with user isolation
+    t0 = time.perf_counter()
     all_hits = rag_service.search_all_collections(query, top_k=3, user_id=state.get("user_id", "default_user"))
+    retrieval_time = round(time.perf_counter() - t0, 3)
     flat_hits = []
     for coll, hits in all_hits.items():
         for hit in hits:
             flat_hits.append(hit)
+
+    logger.info(
+        f"\n========================\nTOP RETRIEVED CHUNKS (retrieval_time={retrieval_time}s)\n========================"
+    )
+    for i, hit in enumerate(flat_hits[:8]):
+        payload = hit.get("payload", {}) or {}
+        logger.info(
+            f"  [{i+1}] collection={payload.get('collection', hit.get('source_type','?'))} "
+            f"doc={payload.get('document_name', hit.get('title','?'))[:50]} "
+            f"page={payload.get('page','?')} "
+            f"score={hit.get('score',0):.4f} "
+            f"preview='{hit.get('text','')[:80]}...'"
+        )
+
+    # Boost chunks with images if visual intent detected
+    visual_intent = has_visual_intent(query)
+    for hit in flat_hits:
+        payload = hit.get("payload", {}) if hit.get("payload") else {}
+        if visual_intent and payload.get("image_path"):
+            hit["score"] = min(1.0, hit.get("score", 0.0) + 0.3)
             
     # Rerank
+    t1 = time.perf_counter()
     reranked = rag_service.reranker.rerank(query, flat_hits, top_k=5)
+    rerank_time = round(time.perf_counter() - t1, 3)
+    
+    logger.info(
+        f"\n========================\nRERANKED CHUNKS (rerank_time={rerank_time}s)\n========================"
+    )
+    for i, hit in enumerate(reranked):
+        payload = hit.get("payload", {}) or {}
+        logger.info(
+            f"  [{i+1}] doc={payload.get('document_name', hit.get('title','?'))[:50]} "
+            f"page={payload.get('page','?')} score={hit.get('score',0):.4f}"
+        )
     
     # Bypass adjacent chunk lookup to ensure focus on highly relevant manual passages
     layout_restored = [hit for hit in reranked if hit.get("score", 0.0) >= 0.45]
@@ -139,14 +203,23 @@ def future_prediction_agent_node(state: AgentState) -> dict[str, Any]:
     if state.get("final_answer"):
         return {"prediction_result": {}, "sub_agent_history": state["sub_agent_history"] + ["future_prediction_agent"]}
         
-    # Standard values
-    sensors = state.get("sensor_values") or {
-        "air_temperature": 298.2,
-        "process_temperature": 308.6,
-        "rotational_speed": 1850,
-        "torque": 45.2,
-        "tool_wear": 120,
-    }
+    # Pull telemetry dynamically from backend.main.TELEMETRY_DATA to prevent divergence
+    sensors = state.get("sensor_values")
+    if not sensors:
+        try:
+            from backend.main import TELEMETRY_DATA
+            sensors = TELEMETRY_DATA.get(state.get("machine_id"), TELEMETRY_DATA["M101"])
+        except Exception as e:
+            logger.warning(f"Could not import TELEMETRY_DATA: {e}")
+            sensors = {
+                "air_temperature": 298.2,
+                "process_temperature": 308.6,
+                "rotational_speed": 1850,
+                "torque": 45.2,
+                "tool_wear": 120,
+                "vibration": 0.22,
+                "telemetry_source": "simulated"
+            }
     
     pred = prediction_engine.predict(
         air_temp=sensors["air_temperature"],
@@ -237,36 +310,66 @@ def report_generator_agent_node(state: AgentState) -> dict[str, Any]:
 
 # --- Synthesizer Node ---
 def synthesizer_node(state: AgentState) -> dict[str, Any]:
-    """Orchestrates final response synthesis formatting like an experienced field engineer based ONLY on uploaded manuals."""
+    """Orchestrates final response synthesis via LLM using ONLY retrieved manual context."""
+    import time
     logger.info("Executing Synthesizer Node...")
     if state.get("final_answer"):
-        return {} # Already handled by Intent Detection
-        
+        return {}  # Already handled by Intent Detection
+
     query = state["query"]
     docs = state.get("retrieved_documents", [])
-    pred = state.get("prediction_result", {})
-    plan = state.get("maintenance_plan", {})
-    
-    doc_context = "\n\n".join([f"SOURCE: {doc['title']} (Page {doc.get('payload', {}).get('page', 'N/A')})\n{doc['text']}" for doc in docs])
-    
-    combined_context = f"""
-=== RETRIEVED MANUAL CONTEXT ===
-{doc_context}
-"""
-    
-    system_rules = """You are an industrial maintenance assistant for the Hyundai R215L Smart Plus excavator.
-Answer the user's question ONLY using the supplied retrieved context.
-Do not use prior knowledge. Never fabricate or guess specifications, error codes, tools, or spare parts.
-If the answer cannot be found in the retrieved context, or if the context is empty, explicitly say:
-'No relevant information was found.'
 
-Do NOT output standard boilerplate headers (like Root Cause, Tools, or Spare Parts) unless they are directly relevant to the user query and supported by specifications in the retrieved manual chunks. If the user asks for a simple summary, return only a summary. If they ask for a pressure value or oil type, return only that information. Keep your tone direct, technical, and engineering-focused."""
+    if not docs:
+        logger.warning("Synthesizer: zero retrieved documents — returning no-results message without LLM call.")
+        return {
+            "final_answer": "I could not find relevant information in the indexed manuals for your query.",
+            "llm_prompt": "N/A — zero retrieval results.",
+            "sub_agent_history": state["sub_agent_history"] + ["synthesizer"],
+        }
 
+    doc_context = "\n\n".join([
+        f"SOURCE: {doc.get('payload', {}).get('document_name', doc.get('title', 'Unknown'))} "
+        f"| Page {doc.get('payload', {}).get('page', 'N/A')} "
+        f"| Section: {doc.get('payload', {}).get('heading', 'General')}\n"
+        f"{doc['text']}"
+        for doc in docs
+    ])
+
+    combined_context = (
+        "=== RETRIEVED MANUAL CONTEXT ===\n"
+        + doc_context
+    )
+
+    system_rules = (
+        "You are an industrial maintenance assistant for the Hyundai R215L Smart Plus excavator.\n"
+        "Answer the user's question ONLY using the supplied retrieved context.\n"
+        "Do not use prior knowledge. Never fabricate specifications, error codes, tools, or spare parts.\n"
+        "Cite the manual name and page number for every fact you state.\n"
+        "If the answer is not in the retrieved context, explicitly say: "
+        "'No relevant information was found in the indexed manuals.'\n"
+        "Keep your tone direct, technical, and engineering-focused."
+    )
+
+    full_prompt = (
+        f"SYSTEM RULES:\n{system_rules}\n\n"
+        f"CONTEXT:\n{combined_context}\n\n"
+        f"USER QUERY:\n{query}"
+    )
+
+    logger.info(
+        f"\n========================\nFINAL PROMPT SENT TO LLM\n========================\n"
+        f"{full_prompt[:1000]}"
+    )
+
+    t0 = time.perf_counter()
     final_answer = llm_service.synthesize(query, combined_context, system_rules)
+    llm_time = round(time.perf_counter() - t0, 2)
+    logger.info(f"LLM synthesis completed in {llm_time}s.")
+
     return {
         "final_answer": final_answer,
-        "llm_prompt": f"SYSTEM RULES:\n{system_rules}\n\nCONTEXT:\n{combined_context}\n\nUSER QUERY:\n{query}",
-        "sub_agent_history": state["sub_agent_history"] + ["synthesizer"]
+        "llm_prompt": full_prompt,
+        "sub_agent_history": state["sub_agent_history"] + ["synthesizer"],
     }
 
 # --- Multi-Agent Orchestrator ---
@@ -311,6 +414,16 @@ class LangGraphOrchestrator:
             self.use_langgraph = False
 
     def run(self, query: str, machine_id: str, sensor_values: dict[str, Any] | None = None, user_id: str = "default_user") -> AgentState:
+        import time
+        t_start = time.perf_counter()
+
+        logger.info(
+            f"\n========================\nUSER QUERY\n========================\n"
+            f"Query     : {query}\n"
+            f"Machine   : {machine_id}\n"
+            f"User      : {user_id}"
+        )
+
         state: AgentState = {
             "query": query,
             "machine_id": machine_id,
@@ -327,9 +440,15 @@ class LangGraphOrchestrator:
         
         # 1. Intent Detection Check
         state.update(intent_detection_agent_node(state))
-        
+        intent_reply = state.get("final_answer", "")
+
+        logger.info(
+            f"\n========================\nINTENT\n========================\n"
+            f"Greeting/shortcut: {bool(intent_reply)}"
+        )
+
         # If it is a greeting/conversational, bypass all other agents
-        if state["final_answer"]:
+        if intent_reply:
             state["confidence_breakdown"] = {"overall": 100, "retrieval": 100, "graph": 100, "evidence": 100, "answer": 100}
             return state
             
@@ -342,6 +461,9 @@ class LangGraphOrchestrator:
         state.update(maintenance_planner_agent_node(state))
         state.update(report_generator_agent_node(state))
         state.update(synthesizer_node(state))
+
+        total_time = round(time.perf_counter() - t_start, 2)
+        logger.info(f"Total pipeline time: {total_time}s | agents: {state['sub_agent_history']}")
         
         return state
 

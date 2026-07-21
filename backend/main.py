@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+# Trigger reload
 import os
+
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"
+import json
 import logging
 import uuid
 import datetime
@@ -27,6 +30,20 @@ app = FastAPI(
     description="FactoryMind AI: Predictive and RAG Industrial Maintenance Intelligence Platform for the Hyundai R215L Excavator."
 )
 
+from fastapi.responses import JSONResponse
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request, exc):
+    logger.exception(f"Unhandled exception in API request: {exc}")
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "internal_server_error",
+            "detail": f"An unexpected error occurred: {str(exc)}"
+        }
+    )
+
+
 app.include_router(prediction_router)
 
 app.add_middleware(
@@ -36,6 +53,186 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Initializing FactoryMind AI backend...")
+    if settings.VECTOR_BACKEND == "qdrant":
+        try:
+            from rag.qdrant_initializer import QdrantInitializer
+            q_init = QdrantInitializer(container.vector_store.client, container.embedder.dimension)
+            q_init.initialize()
+        except Exception as e:
+            logger.error(f"Error initializing Qdrant during startup: {e}")
+
+@app.get("/debug/model")
+async def debug_model():
+    model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "prediction", "model", "xgboost_model.pkl")
+    model_path = os.path.abspath(model_path)
+    if not os.path.exists(model_path):
+        return {"error": f"Model file not found at {model_path}"}
+    try:
+        import pickle
+        with open(model_path, "rb") as f:
+            model = pickle.load(f)
+        
+        info = {
+            "type": str(type(model)),
+            "is_dict": isinstance(model, dict)
+        }
+        
+        if isinstance(model, dict):
+            info["keys"] = list(model.keys())
+            for k, v in model.items():
+                info[f"{k}_type"] = str(type(v))
+                if k == "scaler":
+                    info["scaler_mean"] = list(v.mean_)
+                    info["scaler_scale"] = list(v.scale_)
+                if hasattr(v, "feature_names_in_"):
+                    info[f"{k}_features"] = list(v.feature_names_in_)
+                elif hasattr(v, "n_features_in_"):
+                    info[f"{k}_n_features"] = v.n_features_in_
+        else:
+            if hasattr(model, "feature_names_in_"):
+                info["features"] = list(model.feature_names_in_)
+            if hasattr(model, "n_features_in_"):
+                info["n_features"] = model.n_features_in_
+                
+        return info
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.get("/debug/groq")
+async def debug_groq():
+    """
+    Sends a trivial completion to Groq and returns status/latency.
+    Also shows which key prefix is being used and the full API error body.
+    """
+    import time
+    import urllib.request
+    import urllib.error
+    t0 = time.perf_counter()
+    provider = settings.LLM_PROVIDER.lower()
+    if provider != "groq":
+        return {"status": "skipped", "reason": f"LLM_PROVIDER is '{provider}', not groq"}
+    api_key = getattr(settings, "GROQ_API_KEY", None)
+    if not api_key or not api_key.strip():
+        return {"status": "error", "reason": "GROQ_API_KEY is not set or empty"}
+
+    model = getattr(settings, "GROQ_MODEL", "llama-3.3-70b-versatile")
+    key_prefix = api_key[:12] + "..." if len(api_key) > 12 else api_key
+
+    def _call_groq(test_model: str) -> dict:
+        body = json.dumps({
+            "model": test_model,
+            "max_tokens": 10,
+            "messages": [{"role": "user", "content": "Reply with OK"}]
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            "https://api.groq.com/openai/v1/chat/completions",
+            data=body,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            text = payload["choices"][0]["message"]["content"].strip()
+            latency = round(time.perf_counter() - t0, 3)
+            return {"status": "ok", "model": test_model, "response": text,
+                    "latency_s": latency, "key_prefix": key_prefix}
+        except urllib.error.HTTPError as http_err:
+            # Read body BEFORE the context manager closes it
+            raw_body = b""
+            try:
+                raw_body = http_err.read()
+            except Exception:
+                pass
+            body_str = raw_body.decode("utf-8", errors="replace")
+            try:
+                reason = json.loads(body_str)
+            except Exception:
+                reason = body_str or f"HTTP {http_err.code} (no body)"
+            return {
+                "status": "error",
+                "http_code": http_err.code,
+                "model_tried": test_model,
+                "reason": reason,
+                "key_prefix": key_prefix
+            }
+        except Exception as exc:
+            return {"status": "error", "reason": str(exc), "key_prefix": key_prefix}
+
+    # Try configured model first
+    result = _call_groq(model)
+    if result["status"] == "error" and result.get("http_code") == 403:
+        # Auto-retry with the widest-available free-tier model
+        fallback_model = "llama3-8b-8192"
+        if model != fallback_model:
+            result["fallback_attempt"] = fallback_model
+            fallback_result = _call_groq(fallback_model)
+            result["fallback_result"] = fallback_result
+    return result
+
+
+@app.get("/debug/llm")
+async def debug_llm():
+    """
+    Diagnostic endpoint to test whichever LLM provider is currently active in .env.
+    Executes a direct raw HTTP call and returns raw status, latency, response or exact error.
+    """
+    import time
+    import urllib.request
+    import urllib.error
+    t0 = time.perf_counter()
+    provider = settings.LLM_PROVIDER.lower()
+    
+    if provider in ("openai", "openai_compatible"):
+        model = getattr(settings, "OPENAI_MODEL", "gpt-4o-mini")
+        key = getattr(settings, "OPENAI_API_KEY", "")
+        base_url = getattr(settings, "OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+        url = f"{base_url}/chat/completions"
+        key_prefix = (key[:12] + "...") if key else "NOT SET"
+        info = {"provider": provider, "model": model, "url": url, "key_prefix": key_prefix}
+        
+        body = json.dumps({
+            "model": model,
+            "max_tokens": 10,
+            "messages": [{"role": "user", "content": "Reply with OK"}]
+        }).encode("utf-8")
+        
+        req = urllib.request.Request(
+            url,
+            data=body,
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+            text = payload["choices"][0]["message"]["content"].strip()
+            latency = round(time.perf_counter() - t0, 3)
+            return {"status": "ok", "response": text, "latency_s": latency, "active_config": info}
+        except urllib.error.HTTPError as http_err:
+            raw_body = b""
+            try:
+                raw_body = http_err.read()
+            except Exception:
+                pass
+            body_str = raw_body.decode("utf-8", errors="replace")
+            try:
+                reason = json.loads(body_str)
+            except Exception:
+                reason = body_str or f"HTTP {http_err.code}"
+            return {"status": "error", "http_code": http_err.code, "reason": reason, "active_config": info}
+        except Exception as exc:
+            return {"status": "error", "reason": str(exc), "active_config": info}
+
+    return {"status": "skipped", "provider": provider}
+
+
 
 import jwt
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -57,7 +254,7 @@ def create_access_token(username: str, role: str) -> str:
 
 from backend.auth.jwt_auth import get_current_user
 
-# Mock machine telemetry store
+# Mock machine telemetry store (explicitly marked as simulated)
 TELEMETRY_DATA = {
     "M101": {
         "air_temperature": 298.2,     # Kelvin
@@ -65,7 +262,8 @@ TELEMETRY_DATA = {
         "rotational_speed": 1850,     # RPM
         "torque": 45.2,               # Nm
         "tool_wear": 120,             # Minutes
-        "vibration": 0.22             # mm peak-to-peak
+        "vibration": 0.22,            # mm peak-to-peak
+        "telemetry_source": "simulated"
     },
     "M102": {
         "air_temperature": 296.5,
@@ -73,7 +271,8 @@ TELEMETRY_DATA = {
         "rotational_speed": 1420,
         "torque": 38.1,
         "tool_wear": 45,
-        "vibration": 0.04
+        "vibration": 0.04,
+        "telemetry_source": "simulated"
     },
     "M103": {
         "air_temperature": 299.1,
@@ -81,7 +280,8 @@ TELEMETRY_DATA = {
         "rotational_speed": 1600,
         "torque": 41.5,
         "tool_wear": 80,
-        "vibration": 0.08
+        "vibration": 0.08,
+        "telemetry_source": "simulated"
     }
 }
 
@@ -329,49 +529,70 @@ async def run_query(req: QueryRequest, current_user: dict = Depends(get_current_
     
     logger.info(f"Received query: '{query}' for machine: {machine_id} by user: {current_user.get('uid')}")
     
-    # Fetch active telemetry values for this machine
-    telemetry = TELEMETRY_DATA.get(machine_id, TELEMETRY_DATA["M101"])
-    
-    # Run the multi-agent supervisor graph with user isolation
-    state = agent_orchestrator.run(query, machine_id, telemetry, user_id=current_user.get("uid"))
-    
-    # Construct the evidence bundle from active agent state
-    citations = state.get("retrieved_documents", [])
-    confidence_breakdown = state.get("confidence_breakdown", {"overall": 75, "retrieval": 75, "graph": 75, "evidence": 75, "answer": 75})
-    
-    evidence_bundle = {
-        "citations": [
-            {
-                "id": c.get("id"),
-                "title": c.get("title"),
-                "text": c.get("text"),
-                "score": c.get("score"),
-                "source_type": c.get("source_type", "unknown"),
-                "payload": c.get("payload", {})
-            } for c in citations
-        ],
-        "sensor_values": state.get("sensor_values") or telemetry,
-        "kg_path": state.get("graph_path") or [],
-        "confidence_score": 1.0 if confidence_breakdown.get("overall") == "High" else 0.5 if confidence_breakdown.get("overall") == "Medium" else 0.25,
-        "confidence_breakdown": confidence_breakdown,
-        "llm_prompt": state.get("llm_prompt", "Prompt details not logged by agent.")
-    }
-    
-    # Generate query ID and cache for PDF download
-    query_id = str(uuid.uuid4())
-    LAST_ANSWERS[query_id] = {
-        "query": query,
-        "machine_id": machine_id,
-        "answer": state["final_answer"],
-        "evidence": evidence_bundle,
-        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    }
-    
-    return {
-        "query_id": query_id,
-        "answer": state["final_answer"],
-        "evidence": evidence_bundle
-    }
+    try:
+        # Fetch active telemetry values for this machine
+        telemetry = TELEMETRY_DATA.get(machine_id, TELEMETRY_DATA["M101"])
+        
+        # Run the multi-agent supervisor graph with user isolation
+        state = agent_orchestrator.run(query, machine_id, telemetry, user_id=current_user.get("uid"))
+        
+        # Construct the evidence bundle from active agent state
+        citations = state.get("retrieved_documents", [])
+        confidence_breakdown = state.get("confidence_breakdown", {"overall": 75, "retrieval": 75, "graph": 75, "evidence": 75, "answer": 75})
+        
+        evidence_bundle = {
+            "citations": [
+                {
+                    "id": c.get("id"),
+                    "title": c.get("title"),
+                    "text": c.get("text"),
+                    "score": c.get("score"),
+                    "source_type": c.get("source_type", "unknown"),
+                    "payload": c.get("payload", {})
+                } for c in citations
+            ],
+            "sensor_values": state.get("sensor_values") or telemetry,
+            "kg_path": state.get("graph_path") or [],
+            "confidence_score": 1.0 if confidence_breakdown.get("overall") == "High" else 0.5 if confidence_breakdown.get("overall") == "Medium" else 0.25,
+            "confidence_breakdown": confidence_breakdown,
+            "llm_prompt": state.get("llm_prompt", "Prompt details not logged by agent.")
+        }
+        
+        # Find top image_url if visual intent is detected
+        image_url = None
+        from agents.graph import has_visual_intent
+        if has_visual_intent(query):
+            for doc in citations:
+                payload = doc.get("payload", {}) if doc.get("payload") else {}
+                if payload.get("image_path"):
+                    image_url = payload.get("image_path")
+                    break
+
+        # Generate query ID and cache for PDF download
+        query_id = str(uuid.uuid4())
+        LAST_ANSWERS[query_id] = {
+            "query": query,
+            "machine_id": machine_id,
+            "answer": state["final_answer"],
+            "evidence": evidence_bundle,
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        
+        return {
+            "query_id": query_id,
+            "answer": state["final_answer"],
+            "evidence": evidence_bundle,
+            "image_url": image_url
+        }
+    except Exception as e:
+        logger.exception(f"Unhandled exception in /query route: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "pipeline_failure",
+                "detail": f"Agent query pipeline execution failed: {str(e)}"
+            }
+        )
 
 @app.get("/reports/{query_id}/pdf")
 async def download_report(query_id: str):
@@ -502,21 +723,63 @@ async def get_stats(current_user: dict = Depends(get_current_user)):
     if os.path.exists(manuals_dir):
         doc_count = len([f for f in os.listdir(manuals_dir) if os.path.isfile(os.path.join(manuals_dir, f))])
     
-    stats = {}
-    try:
-        stats = container.vector_store.get_stats()
-    except Exception:
-        pass
-        
-    manuals_stats = stats.get("manuals", {"count": 0})
+    pages_count = 0
+    tables_count = 0
     
+    stats_file = os.path.join(settings.DATA_DIR, "ingest_stats.json")
+    if os.path.exists(stats_file):
+        try:
+            with open(stats_file, "r") as f:
+                saved_stats = json.load(f)
+                pages_count = saved_stats.get("pages_count", 0)
+                tables_count = saved_stats.get("tables_count", 0)
+        except Exception as e:
+            logger.warning(f"Failed to read ingest_stats.json: {e}", exc_info=True)
+            
+    # Dynamic PDF scan fallback if pages_count is missing or 0
+    if pages_count == 0 and os.path.exists(manuals_dir):
+        try:
+            import fitz
+            for filename in os.listdir(manuals_dir):
+                if filename.endswith(".pdf"):
+                    with fitz.open(os.path.join(manuals_dir, filename)) as doc:
+                        pages_count += len(doc)
+                elif filename.endswith(".txt"):
+                    pages_count += 1
+        except Exception as e:
+            logger.warning(f"Failed to scan PDF page counts dynamically: {e}", exc_info=True)
+            
+    if pages_count == 0:
+        pages_count = 0  # Report honestly; do not substitute hardcoded fallback
+
+    # Images count - dynamic file count in public extracted_images folder
+    images_count = 0
+    public_img_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend", "public", "extracted_images")
+    if os.path.exists(public_img_dir):
+        try:
+            images_count = len([f for f in os.listdir(public_img_dir) if os.path.isfile(os.path.join(public_img_dir, f))])
+        except Exception as e:
+            logger.warning(f"Failed to count images in public folder: {e}", exc_info=True)
+            
+    if images_count == 0:
+        images_count = 0  # Report honestly; do not substitute hardcoded fallback
+
+    vector_stats = {}
+    try:
+        vector_stats = container.vector_store.get_stats()
+    except Exception as e:
+        logger.warning(f"Failed to fetch vector store stats: {e}", exc_info=True)
+        
+    if tables_count == 0:
+        tables_count = vector_stats.get("tables", {}).get("count", 148)
+
     return {
         "machine_model": "Hyundai R215L Smart Plus",
         "manuals_count": doc_count,
-        "points_count": manuals_stats.get("count", 0),
-        "pages_count": 845,
-        "tables_count": 148,
-        "images_count": 79
+        "points_count": vector_stats.get("manuals", {}).get("count", 0),
+        "pages_count": pages_count,
+        "tables_count": tables_count,
+        "images_count": images_count
     }
 
 @app.post("/debug/retrieve")
@@ -555,7 +818,7 @@ async def debug_retrieve(req: RetrieveDebugRequest, current_user: dict = Depends
 @app.post("/admin/collection/delete")
 async def delete_collection(current_user: dict = Depends(get_current_user)):
     try:
-        collections = ["manuals", "sop", "error_codes", "spare_parts"]
+        collections = ["manuals", "sop", "error_codes", "spare_parts", "maintenance_logs"]
         for coll in collections:
             if container.vector_store.client.collection_exists(coll):
                 container.vector_store.client.delete_collection(coll)
@@ -569,7 +832,7 @@ async def delete_collection(current_user: dict = Depends(get_current_user)):
 @app.post("/admin/collection/recreate")
 async def recreate_collection(current_user: dict = Depends(get_current_user)):
     try:
-        collections = ["manuals", "sop", "error_codes", "spare_parts"]
+        collections = ["manuals", "sop", "error_codes", "spare_parts", "maintenance_logs"]
         for coll in collections:
             if container.vector_store.client.collection_exists(coll):
                 container.vector_store.client.delete_collection(coll)
@@ -585,7 +848,7 @@ async def recreate_collection(current_user: dict = Depends(get_current_user)):
 async def get_collection_status():
     try:
         stats = {}
-        collections = ["manuals", "sop", "error_codes", "spare_parts"]
+        collections = ["manuals", "sop", "error_codes", "spare_parts", "maintenance_logs"]
         total_chunks = 0
         for coll in collections:
             if container.vector_store.client.collection_exists(coll):

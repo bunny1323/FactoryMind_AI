@@ -207,7 +207,8 @@ def get_chat_history(session_id: str):
         d = dict(msg)
         try:
             d["evidence"] = json.loads(d["evidence"]) if d["evidence"] else None
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to parse evidence JSON for chat message: {e}", exc_info=True)
             d["evidence"] = None
         result.append(d)
     return result

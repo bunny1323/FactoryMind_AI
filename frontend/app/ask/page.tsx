@@ -59,6 +59,7 @@ interface Message {
   evidence?: Evidence;
   queryId?: string;
   feedback?: "like" | "dislike" | null;
+  imageUrl?: string;
 }
 
 const QUICK_ACTIONS = [
@@ -192,6 +193,9 @@ export default function AskPage() {
     const controller = new AbortController();
     setAbortController(controller);
 
+    let errorStatus = 0;
+    let errorMessage = "";
+    
     try {
       const token = typeof window !== "undefined" ? localStorage.getItem("fm_jwt_token") : null;
       const res = await fetch("http://127.0.0.1:8000/query", {
@@ -212,22 +216,39 @@ export default function AskPage() {
           text: data.answer,
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           evidence: data.evidence,
-          queryId: data.query_id
+          queryId: data.query_id,
+          imageUrl: data.image_url || undefined
         };
         const nextMsgs = [...updatedMessages, assistantMsg];
         saveHistory(nextMsgs);
         setActiveMessageId(assistantMsg.id);
       } else {
-        throw new Error("Server returned an error");
+        errorStatus = res.status;
+        try {
+          const errData = await res.json();
+          // Extract specific pipeline error detail if returned, else default
+          const parsedErr = errData.detail?.detail || errData.detail || errData.error || errData.message;
+          errorMessage = typeof parsedErr === "string" ? parsedErr : JSON.stringify(parsedErr);
+        } catch {
+          errorMessage = "No response error details provided by the server.";
+        }
+        throw new Error("HTTP_ERROR");
       }
     } catch (err: any) {
       if (err.name === "AbortError") return;
       console.error("Backend request failed:", err);
       
+      let displayError = "";
+      if (err.message === "HTTP_ERROR") {
+        displayError = `⚠️ **Backend Error (${errorStatus})**: ${errorMessage || "Internal Server Error"}`;
+      } else {
+        displayError = "⚠️ **Connection Error**: Unable to communicate with the FactoryMind AI backend RAG server. Please verify that the uvicorn backend service is running locally on `http://127.0.0.1:8000`.";
+      }
+      
       const assistantMsg: Message = {
         id: Math.random().toString(36).substring(7),
         role: "assistant",
-        text: "⚠️ **Connection Error**: Unable to communicate with the FactoryMind AI backend RAG server. Please verify that the uvicorn backend service is running locally on `http://127.0.0.1:8000`.",
+        text: displayError,
         timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
       };
       const nextMsgs = [...updatedMessages, assistantMsg];
@@ -520,6 +541,15 @@ export default function AskPage() {
                         </div>
                       ) : (
                         <p className="text-xs md:text-sm font-medium">{msg.text}</p>
+                      )}
+                      {msg.role === "assistant" && msg.imageUrl && (
+                        <div className="relative w-full h-64 mt-3 rounded-xl overflow-hidden border border-brown-300/20 bg-white flex items-center justify-center p-2">
+                          <img
+                            src={msg.imageUrl}
+                            alt="Visual Schematic Answer"
+                            className="max-w-full max-h-full object-contain"
+                          />
+                        </div>
                       )}
                     </div>
 

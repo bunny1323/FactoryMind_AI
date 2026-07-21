@@ -170,6 +170,26 @@ class QdrantHybridVectorStore(VectorStore):
                 vectors_config={"dense": models.VectorParams(size=self.dimension, distance=models.Distance.COSINE)},
                 sparse_vectors_config={"sparse": models.SparseVectorParams(index=models.SparseIndexParams(on_disk=False))},
             )
+            logger.info(f"Created collection '{collection}'.")
+
+        # Idempotently ensure the user_id payload index exists.
+        # Required for filtered queries on manuals and sop collections.
+        # Qdrant allows calling create_payload_index even if the index already exists.
+        try:
+            self.client.create_payload_index(
+                collection_name=collection,
+                field_name="user_id",
+                field_schema="keyword",
+            )
+            logger.info(f"Payload index on 'user_id' ensured for collection '{collection}'.")
+        except Exception as idx_err:
+            # Ignore "already exists" errors; log anything unexpected.
+            err_str = str(idx_err).lower()
+            if "already exists" in err_str or "conflict" in err_str:
+                logger.debug(f"user_id index already exists for '{collection}' — OK.")
+            else:
+                logger.warning(f"Could not create user_id payload index for '{collection}': {idx_err}")
+
 
     def upsert(self, collection: str, records: list[dict[str, Any]]) -> int:
         self.ensure_collection(collection)
@@ -216,7 +236,7 @@ class QdrantHybridVectorStore(VectorStore):
         return len(points)
 
     def search(self, collection: str, query: str, top_k: int, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
-        self.ensure_collection(collection)
+        # Startup initializer guarantees collections & indexes exist. Skip per-query checks for maximum speed.
         q_filter = None
         if filters:
             must = [self.models.FieldCondition(key=key, match=self.models.MatchValue(value=value)) for key, value in filters.items() if value is not None]
@@ -225,16 +245,20 @@ class QdrantHybridVectorStore(VectorStore):
         sparse = self.sparse_embedder.encode(query)
         prefetch_limit = max(top_k * 4, 20)
         
-        response = self.client.query_points(
-            collection_name=collection,
-            prefetch=[
-                self.models.Prefetch(query=self.embedder.encode(query), using="dense", limit=prefetch_limit, filter=q_filter),
-                self.models.Prefetch(query=self.models.SparseVector(indices=sparse.indices, values=sparse.values), using="sparse", limit=prefetch_limit, filter=q_filter),
-            ],
-            query=self.models.FusionQuery(fusion=self.models.Fusion.RRF),
-            limit=top_k,
-            with_payload=True,
-        )
+        try:
+            response = self.client.query_points(
+                collection_name=collection,
+                prefetch=[
+                    self.models.Prefetch(query=self.embedder.encode(query), using="dense", limit=prefetch_limit, filter=q_filter),
+                    self.models.Prefetch(query=self.models.SparseVector(indices=sparse.indices, values=sparse.values), using="sparse", limit=prefetch_limit, filter=q_filter),
+                ],
+                query=self.models.FusionQuery(fusion=self.models.Fusion.RRF),
+                limit=top_k,
+                with_payload=True,
+            )
+        except Exception as err:
+            logger.warning(f"Qdrant query_points failed for collection '{collection}': {err}")
+            return []
         
         results = []
         for point in response.points:
@@ -254,7 +278,8 @@ class QdrantHybridVectorStore(VectorStore):
         try:
             self.client.get_collections()
             return True
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Qdrant ping failed: {e}")
             return False
 
     def get_stats(self) -> dict[str, dict[str, Any]]:
@@ -269,7 +294,8 @@ class QdrantHybridVectorStore(VectorStore):
                     }
                 else:
                     stats[name] = {"count": 0, "last_updated": "Never"}
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Failed to fetch collection stats for '{name}': {e}", exc_info=True)
                 stats[name] = {"count": 0, "last_updated": "Error"}
         return stats
 

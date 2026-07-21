@@ -49,7 +49,8 @@ def get_current_user(credentials: Optional[HTTPAuthorizationCredentials] = Depen
         }
     try:
         return verify_token(credentials.credentials)
-    except Exception:
+    except Exception as e:
+        logger.warning(f"JWT token verification failed: {e}. Falling back to default admin user.")
         return {
             "uid": "user-onepiece",
             "email": "luffy@factorymind.ai",

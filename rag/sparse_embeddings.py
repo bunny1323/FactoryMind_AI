@@ -57,6 +57,6 @@ def build_sparse_embedder(backend: str = "fastembed", model_name: str = "Qdrant/
     if backend == "fastembed":
         try:
             return FastEmbedBm25SparseEmbedder(model_name)
-        except Exception:
-            logger.warning("FastEmbed sparse model not available, using local HashLexicalSparseEmbedder.")
+        except Exception as e:
+            logger.warning(f"FastEmbed sparse model not available, using local HashLexicalSparseEmbedder: {e}", exc_info=True)
     return HashLexicalSparseEmbedder()

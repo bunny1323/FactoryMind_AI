@@ -34,11 +34,17 @@ class Settings(BaseSettings):
     RAG_MIN_RELEVANCE_SCORE: float = 0.35
 
     # LLM Settings
-    LLM_PROVIDER: str = "mock"  # 'mock', 'groq', 'openai', 'ollama', 'anthropic'
+    # Providers: 'mock', 'groq', 'openai', 'openai_compatible', 'ollama', 'anthropic'
+    LLM_PROVIDER: str = "mock"
     GROQ_API_KEY: str | None = None
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
     OPENAI_API_KEY: str | None = None
     OPENAI_MODEL: str = "gpt-4o-mini"
+    # Set OPENAI_BASE_URL to use any OpenAI-compatible provider:
+    #   Google AI Studio: https://generativelanguage.googleapis.com/v1beta/openai/
+    #   OpenRouter:       https://openrouter.ai/api/v1
+    #   Together AI:      https://api.together.xyz/v1
+    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
     OLLAMA_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:7b"
     ANTHROPIC_API_KEY: str | None = None
@@ -50,9 +56,23 @@ class Settings(BaseSettings):
     NEO4J_PASSWORD: str = "password"
 
     model_config = SettingsConfigDict(
-        env_file=".env",
+        # Use absolute path so .env is always found regardless of working directory
+        env_file=os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env"),
         env_file_encoding="utf-8",
         extra="ignore"
     )
 
 settings = Settings()
+
+# Debug: confirm what was loaded from .env
+import logging as _logging
+_cfg_logger = _logging.getLogger("factorymind")
+_env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+_env_exists = os.path.exists(_env_path)
+_key_preview = (settings.OPENAI_API_KEY[:12] + "...") if settings.OPENAI_API_KEY else "NOT SET"
+_cfg_logger.info(
+    f"CONFIG LOADED: .env path={_env_path!r} (exists={_env_exists}), "
+    f"LLM_PROVIDER={settings.LLM_PROVIDER!r}, "
+    f"OPENAI_API_KEY={_key_preview}"
+)
+

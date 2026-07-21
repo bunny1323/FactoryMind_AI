@@ -58,6 +58,6 @@ def build_embedder(backend: str = "fastembed", model_name: str = "BAAI/bge-small
     if backend == "fastembed":
         try:
             return FastEmbedDenseEmbedder(model_name)
-        except Exception:
-            logger.warning("FastEmbed not available, using local HashEmbedder.")
+        except Exception as e:
+            logger.warning(f"FastEmbed not available, using local HashEmbedder: {e}", exc_info=True)
     return HashEmbedder(dimension)

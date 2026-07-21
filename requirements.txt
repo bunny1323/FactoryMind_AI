@@ -18,3 +18,4 @@ fastembed>=0.5.1
 pyjwt==2.10.1
 langgraph>=0.1.0
 pymupdf
+docling

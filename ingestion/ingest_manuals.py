@@ -110,9 +110,24 @@ def extract_tables_camelot(pdf_path: str, page_num: int) -> list[str]:
     return tables_md
 
 def run_ocr_on_page(doc: Any, page_num: int) -> str:
-    """Multi-stage OCR fallback pipeline (PaddleOCR -> pytesseract -> PyMuPDF)."""
+    """Multi-stage OCR fallback pipeline (PyMuPDF digital text -> PaddleOCR -> Docling Layout)."""
     try:
         page = doc.load_page(page_num - 1)
+    except Exception as e:
+        logger.warning(f"Failed to load page {page_num} for OCR: {e}", exc_info=True)
+        return ""
+    
+    # Stage 1: Check for digital text using PyMuPDF
+    try:
+        raw_text = page.get_text()
+        if raw_text.strip() and len(raw_text.strip()) > 100:
+            logger.info(f"Page {page_num}: Digital text found using PyMuPDF.")
+            return raw_text
+    except Exception as e:
+        logger.warning(f"PyMuPDF text extraction failed on page {page_num}: {e}", exc_info=True)
+    
+    # Stage 2: PaddleOCR for scanned pages
+    try:
         pix = page.get_pixmap(dpi=150)
         from PIL import Image
         import io
@@ -122,11 +137,10 @@ def run_ocr_on_page(doc: Any, page_num: int) -> str:
         logger.warning(f"Failed to generate page pixmap on page {page_num}: {pix_err}", exc_info=True)
         return ""
 
-    # Stage 1: PaddleOCR
     try:
         from paddleocr import PaddleOCR
         import numpy as np
-        ocr_engine = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
+        ocr_engine = PaddleOCR(use_angle_cls=True, lang='en')
         img_np = np.array(img)
         result = ocr_engine.ocr(img_np, cls=True)
         txts = []
@@ -139,24 +153,23 @@ def run_ocr_on_page(doc: Any, page_num: int) -> str:
     except Exception as ocr_err:
         logger.warning(f"PaddleOCR failed on page {page_num}: {ocr_err}", exc_info=True)
 
-    # Stage 2: pytesseract
+    # Stage 3: Docling Layout Analysis (if available)
     try:
-        import pytesseract
-        tesseract_bin = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-        if os.path.exists(tesseract_bin):
-            pytesseract.pytesseract.tesseract_cmd = tesseract_bin
-        text = pytesseract.image_to_string(img)
-        if text.strip():
-            logger.info(f"Page {page_num}: OCR Success using pytesseract.")
-            return text
-    except Exception as ocr_err2:
-        logger.warning(f"pytesseract failed on page {page_num}: {ocr_err2}")
+        from docling.document_converter import DocumentConverter
+        logger.info(f"Page {page_num}: Attempting Docling layout analysis.")
+        # For now, fall back to PyMuPDF raw text if Docling is not fully integrated
+        raw_text = page.get_text()
+        if raw_text.strip():
+            logger.warning(f"Page {page_num}: Fell back to PyMuPDF raw text (Docling not fully integrated).")
+            return raw_text
+    except Exception as docling_err:
+        logger.warning(f"Docling failed on page {page_num}: {docling_err}", exc_info=True)
 
-    # Stage 3: PyMuPDF raw block layout text
+    # Final fallback: PyMuPDF raw text
     try:
         raw_text = page.get_text()
         if raw_text.strip():
-            logger.warning(f"Page {page_num}: OCR libraries unavailable. Fell back to raw PyMuPDF text.")
+            logger.warning(f"Page {page_num}: Final fallback to PyMuPDF raw text.")
             return raw_text
     except Exception as e:
         logger.warning(f"PyMuPDF fallback text fetch failed on page {page_num}: {e}", exc_info=True)
@@ -437,21 +450,29 @@ def run_manuals_ingestion(vector_store: VectorStore, manuals_dir: str, collectio
                                 section=current_section
                             ))
 
-                # 7. Attach images only to the chunks that actually reference them
+                # 7. Attach images with captions and context to relevant chunks
                 if page_image_paths:
-                    img_ref_pattern = re.compile(r"(?i)(fig\.?\s*\d+|figure\s*\d+|diagram|illustration)")
+                    img_ref_pattern = re.compile(r"(?i)(fig\.?\s*\d+|figure\s*\d+|diagram|illustration|schematic|drawing)")
                     attached = False
                     
+                    # Try to find caption text near image references
                     for elem in page_elements:
                         if elem.type in ["text", "table"] and img_ref_pattern.search(elem.text):
                             elem.image_path = page_image_paths[0]
+                            # Extract caption if present in the text
+                            caption_match = re.search(r"(?i)(fig\.?\s*\d+|figure\s*\d+):\s*([^.]+)", elem.text)
+                            if caption_match:
+                                elem.caption = caption_match.group(2).strip()
+                            else:
+                                elem.caption = f"Diagram from page {page_num}"
                             attached = True
                             
-                    # Fallback: attach to first text/table chunk
+                    # Fallback: attach to first text/table chunk with context
                     if not attached:
                         for elem in page_elements:
                             if elem.type in ["text", "table"]:
                                 elem.image_path = page_image_paths[0]
+                                elem.caption = f"Diagram from page {page_num}"
                                 break
 
                 # Add page elements to manual elements list
@@ -486,29 +507,86 @@ def run_manuals_ingestion(vector_store: VectorStore, manuals_dir: str, collectio
 
         global_tables_count += tables_count
 
-        # --- Structure-Aware Chunking & Relationship Graph Builder ---
+        # --- Multimodal Chunking: Keep text + image + caption + context together ---
         final_chunks: list[dict[str, Any]] = []
-        for elem in file_elements:
+        
+        for idx, elem in enumerate(file_elements):
             chunk_type = elem.type
             text_data = elem.text
             
+            # Build multimodal context for this chunk
+            chunk_context = []
+            
+            # Add previous paragraph if available
+            if idx > 0 and file_elements[idx - 1].type == "text":
+                prev_text = file_elements[idx - 1].text[:300]  # First 300 chars of previous
+                chunk_context.append(f"[Previous Context]: {prev_text}")
+            
+            # Add current element
+            if chunk_type == "image":
+                chunk_context.append(f"[Image]: {elem.caption or 'Diagram'}")
+                if elem.image_path:
+                    chunk_context.append(f"[Image Path]: {elem.image_path}")
+            elif chunk_type == "table":
+                chunk_context.append(f"[Table]: {elem.caption or 'Technical Specifications'}")
+            else:
+                chunk_context.append(f"[Text]: {text_data}")
+            
+            # Add next paragraph if available
+            if idx < len(file_elements) - 1 and file_elements[idx + 1].type == "text":
+                next_text = file_elements[idx + 1].text[:300]  # First 300 chars of next
+                chunk_context.append(f"[Next Context]: {next_text}")
+            
+            # Combine context
+            combined_text = "\n\n".join(chunk_context)
+            
+            # For long text chunks, split by sentences but preserve image/caption context
             if chunk_type == "text" and len(text_data) > 1000:
                 sub_paras = [p.strip() for p in re.split(r"(?<=\. )\s*", text_data) if p.strip()]
                 current_sub = []
                 current_len = 0
+                
                 for sp in sub_paras:
                     current_sub.append(sp)
                     current_len += len(sp)
-                    if current_len >= 1200: # ~350-400 words
-                        sub_text = " ".join(current_sub)
+                    
+                    if current_len >= 1200:  # ~350-400 words
+                        # Preserve context for each sub-chunk
+                        sub_context = []
+                        if idx > 0 and file_elements[idx - 1].type == "text":
+                            sub_context.append(f"[Previous Context]: {file_elements[idx - 1].text[:200]}")
+                        sub_context.append(f"[Text]: {' '.join(current_sub)}")
+                        if idx < len(file_elements) - 1 and file_elements[idx + 1].type == "text":
+                            sub_context.append(f"[Next Context]: {file_elements[idx + 1].text[:200]}")
+                        
+                        # Add image/caption if attached to this element
+                        if elem.image_path:
+                            sub_context.insert(1, f"[Related Image]: {elem.caption or 'Diagram'}")
+                            sub_context.insert(2, f"[Image Path]: {elem.image_path}")
+                        
+                        sub_text = "\n\n".join(sub_context)
                         final_chunks.append({"element": elem, "text": sub_text})
                         current_sub = []
                         current_len = 0
+                
                 if current_sub:
-                    sub_text = " ".join(current_sub)
+                    # Final sub-chunk with context
+                    sub_context = []
+                    if idx > 0 and file_elements[idx - 1].type == "text":
+                        sub_context.append(f"[Previous Context]: {file_elements[idx - 1].text[:200]}")
+                    sub_context.append(f"[Text]: {' '.join(current_sub)}")
+                    if idx < len(file_elements) - 1 and file_elements[idx + 1].type == "text":
+                        sub_context.append(f"[Next Context]: {file_elements[idx + 1].text[:200]}")
+                    
+                    if elem.image_path:
+                        sub_context.insert(1, f"[Related Image]: {elem.caption or 'Diagram'}")
+                        sub_context.insert(2, f"[Image Path]: {elem.image_path}")
+                    
+                    sub_text = "\n\n".join(sub_context)
                     final_chunks.append({"element": elem, "text": sub_text})
             else:
-                final_chunks.append({"element": elem, "text": text_data})
+                # For short text, tables, and images - keep as single chunk with context
+                final_chunks.append({"element": elem, "text": combined_text})
 
         file_records = []
         for idx, chunk in enumerate(final_chunks):

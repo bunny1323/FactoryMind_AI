@@ -7,6 +7,7 @@ from backend.services.rag_service import rag_service
 from backend.services.llm_service import llm_service
 from prediction.infer import prediction_engine
 from backend.config import settings
+from backend.constants import get_greeting_response, get_machine_info_response, MACHINE_MODEL, SUPPORTED_MACHINES
 
 logger = logging.getLogger("factorymind")
 
@@ -54,40 +55,17 @@ def intent_detection_agent(q: str) -> str | None:
         "machine do you", "what machines", "which machines"
     ]
     if any(kw in q_lower for kw in machine_keywords):
-        return (
-            "I support the **Hyundai R215L Smart Plus** crawler excavator.\n\n"
-            "My knowledge base includes service manuals, maintenance SOPs, error code tables, "
-            "spare parts catalogue, and maintenance logs specifically for this model.\n\n"
-            "**Tracked machines in this deployment:**\n"
-            "- **M101** — Primary R215L unit (active monitoring)\n"
-            "- **M102** — Secondary R215L unit\n"
-            "- **M103** — Tertiary R215L unit\n\n"
-            "Ask me anything about maintenance, fault diagnosis, hydraulic specs, or spare parts!"
-        )
+        return get_machine_info_response()
 
     # --- Greetings and conversational FAQs ---
-    greetings = {
-        "hi": "Hello! I am FactoryMind AI, your Explainable Multimodal Industrial Copilot for the Hyundai R215L excavator. How can I assist you with maintenance, diagnostics, or troubleshooting today?",
-        "hello": "Hello! I am FactoryMind AI, your Explainable Multimodal Industrial Copilot for the Hyundai R215L excavator. How can I assist you with maintenance, diagnostics, or troubleshooting today?",
-        "hey": "Hello! I am FactoryMind AI. How can I assist you with the Hyundai R215L today?",
-        "good morning": "Good morning! I am FactoryMind AI. Ready to assist with excavator maintenance, diagnostic checks, or spare parts lookup.",
-        "good afternoon": "Good afternoon! Ready to assist with excavator maintenance, fault diagnosis, or spare parts lookup.",
-        "good evening": "Good evening! Ready to assist with excavator maintenance, fault diagnosis, or spare parts lookup.",
-        "how are you": "I am operating at peak efficiency, monitoring all telemetry streams. How can I help you troubleshoot or maintain the excavator today?",
-        "thank you": "You're welcome! Let me know if you need any more manual citations, repair SOPs, or diagnostic assessments.",
-        "thanks": "You're welcome! Let me know if you need any more manual citations, repair SOPs, or diagnostic assessments.",
-        "who are you": "I am FactoryMind AI, an Explainable Multimodal Industrial Copilot powered by Layout-Aware Agentic RAG. I assist maintenance engineers with Hyundai R215L excavators by combining RAG manuals, telemetry prediction models, and knowledge graphs.",
-        "what are you": "I am FactoryMind AI — an AI-powered industrial maintenance copilot for the Hyundai R215L Smart Plus excavator. I combine vector search over indexed service manuals, XGBoost predictive failure detection, and a multi-agent RAG pipeline.",
-        "help": "I can help you troubleshoot faults, search service manuals, lookup spare parts, retrieve step-by-step SOPs, and analyze telemetry. Try asking: 'Machine M101 is showing increased vibration. What should I do?'",
-        "about": "FactoryMind AI is a premium Industry 4.0 copilot. I analyze structural/hydraulic sensor telemetry, query Neo4j knowledge graphs, and retrieve layout-aware manuals to deliver explainable, evidence-backed repair dispatch plans.",
-        "capabilities": "My capabilities include:\n1. **Layout-Aware Multimodal RAG** (manuals, tables, diagrams)\n2. **Knowledge Graph** query mapping\n3. **Telemetry risk analysis** (XGBoost predictive failure model)\n4. **Automated PDF Maintenance Report** generation\n\nAsk me about hydraulic pressures, error codes, spare parts, or SOPs!",
-        "introduce yourself": "Hello! I am FactoryMind AI, your Explainable Multimodal Industrial Copilot. I combine manuals, telemetry assessments, and component knowledge graphs under a multi-agent supervisor to assist you like an experienced maintenance engineer.",
-    }
-
     # Exact or prefix/suffix match
-    for key, response in greetings.items():
+    for key in ["hi", "hello", "hey", "good morning", "good afternoon", "good evening", 
+                "how are you", "thank you", "thanks", "who are you", "what are you", 
+                "help", "about", "capabilities", "introduce yourself"]:
         if q_lower == key or q_lower.startswith(key + " ") or q_lower.endswith(" " + key):
-            return response
+            response = get_greeting_response(key)
+            if response:
+                return response
 
     return None
 
@@ -125,10 +103,20 @@ def document_retrieval_agent_node(state: AgentState) -> dict[str, Any]:
     if state.get("final_answer"):
         return {"retrieved_documents": [], "sub_agent_history": state["sub_agent_history"] + ["document_retrieval_agent"]}
         
+    # Log intent for retrieval
+    from backend.services.rag_service import classify_intent
+    intent = classify_intent(query)
+    logger.info(f"RETRIEVAL INTENT: {intent}")
+    
     # Search all collections with user isolation
     t0 = time.perf_counter()
     all_hits = rag_service.search_all_collections(query, top_k=3, user_id=state.get("user_id", "default_user"))
     retrieval_time = round(time.perf_counter() - t0, 3)
+    
+    # Log collections searched
+    collections_searched = list(all_hits.keys())
+    logger.info(f"COLLECTIONS SEARCHED: {collections_searched}")
+    
     flat_hits = []
     for coll, hits in all_hits.items():
         for hit in hits:
@@ -310,7 +298,7 @@ def report_generator_agent_node(state: AgentState) -> dict[str, Any]:
 
 # --- Synthesizer Node ---
 def synthesizer_node(state: AgentState) -> dict[str, Any]:
-    """Orchestrates final response synthesis via LLM using ONLY retrieved manual context."""
+    """Orchestrates final response synthesis via LLM using ONLY retrieved manual context with structured output."""
     import time
     logger.info("Executing Synthesizer Node...")
     if state.get("final_answer"):
@@ -327,10 +315,12 @@ def synthesizer_node(state: AgentState) -> dict[str, Any]:
             "sub_agent_history": state["sub_agent_history"] + ["synthesizer"],
         }
 
+    # Build structured context with clear source citations
     doc_context = "\n\n".join([
         f"SOURCE: {doc.get('payload', {}).get('document_name', doc.get('title', 'Unknown'))} "
         f"| Page {doc.get('payload', {}).get('page', 'N/A')} "
-        f"| Section: {doc.get('payload', {}).get('heading', 'General')}\n"
+        f"| Section: {doc.get('payload', {}).get('heading', 'General')} "
+        f"| Score: {doc.get('score', 0):.3f}\n"
         f"{doc['text']}"
         for doc in docs
     ])
@@ -344,7 +334,12 @@ def synthesizer_node(state: AgentState) -> dict[str, Any]:
         "You are an industrial maintenance assistant for the Hyundai R215L Smart Plus excavator.\n"
         "Answer the user's question ONLY using the supplied retrieved context.\n"
         "Do not use prior knowledge. Never fabricate specifications, error codes, tools, or spare parts.\n"
-        "Cite the manual name and page number for every fact you state.\n"
+        "Structure your answer as follows:\n"
+        "1. **Summary**: Brief 1-2 sentence summary of the answer\n"
+        "2. **Detailed Answer**: Complete technical explanation\n"
+        "3. **Evidence**: Key facts with manual name and page number citations\n"
+        "4. **Relevant Pages**: List all page numbers referenced\n"
+        "5. **Confidence**: High/Medium/Low based on context quality\n\n"
         "If the answer is not in the retrieved context, explicitly say: "
         "'No relevant information was found in the indexed manuals.'\n"
         "Keep your tone direct, technical, and engineering-focused."
@@ -450,16 +445,35 @@ class LangGraphOrchestrator:
         # If it is a greeting/conversational, bypass all other agents
         if intent_reply:
             state["confidence_breakdown"] = {"overall": 100, "retrieval": 100, "graph": 100, "evidence": 100, "answer": 100}
+            total_time = round(time.perf_counter() - t_start, 2)
+            logger.info(f"Total pipeline time: {total_time}s | agents: {state['sub_agent_history']}")
             return state
             
-        # 2. Execute full agent pipeline
+        # 2. Dynamic agent routing based on query intent
+        from backend.services.rag_service import classify_intent
+        intent = classify_intent(query)
+        
+        # Always execute these core agents
         state.update(supervisor_agent_node(state))
         state.update(document_retrieval_agent_node(state))
-        state.update(knowledge_graph_agent_node(state))
-        state.update(future_prediction_agent_node(state))
+        
+        # Conditional agent execution based on intent
+        if intent in ["PREDICTION", "MAINTENANCE", "TROUBLESHOOTING"]:
+            # Only run prediction for relevant intents
+            state.update(future_prediction_agent_node(state))
+        
+        if intent in ["TROUBLESHOOTING", "ERROR_CODE", "MAINTENANCE"]:
+            # Knowledge graph useful for troubleshooting scenarios
+            state.update(knowledge_graph_agent_node(state))
+        
+        # Always run evidence aggregation and synthesizer
         state.update(evidence_aggregation_agent_node(state))
-        state.update(maintenance_planner_agent_node(state))
-        state.update(report_generator_agent_node(state))
+        
+        # Skip maintenance planner and report generator for simple lookups
+        if intent not in ["GREETING", "MANUAL_LOOKUP", "SPECIFICATION"]:
+            state.update(maintenance_planner_agent_node(state))
+            state.update(report_generator_agent_node(state))
+        
         state.update(synthesizer_node(state))
 
         total_time = round(time.perf_counter() - t_start, 2)

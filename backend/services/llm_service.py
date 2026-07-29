@@ -331,7 +331,7 @@ class LLMService:
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "options": {"temperature": 0.15},
+            "options": {"temperature": 0.15, "num_ctx": 4096},
             "stream": False,
         }).encode("utf-8")
 
@@ -339,7 +339,7 @@ class LLMService:
             url, data=body, headers={"Content-Type": "application/json"}, method="POST"
         )
         try:
-            with urllib.request.urlopen(request, timeout=30) as response:
+            with urllib.request.urlopen(request, timeout=120) as response:
                 payload = json.loads(response.read().decode("utf-8"))
             return payload["message"]["content"].strip()
 

@@ -39,8 +39,8 @@ def run_ingestion_task(job_id: str, pipeline_name: str, user_id: str = "default_
             from ingestion.ingest_manuals import run_manuals_ingestion
             count = run_manuals_ingestion(vector_store, os.path.join(data_dir, "manuals"), "manuals", user_id=user_id)
             
-            jobs[job_id]["progress"] = 70
-            jobs[job_id]["message"] = "Processing SOP files..."
+            _jobs[job_id]["progress"] = 70
+            _jobs[job_id]["message"] = "Processing SOP files..."
             sop_count = run_manuals_ingestion(vector_store, os.path.join(data_dir, "sop"), "sop", user_id=user_id)
             
             _jobs[job_id]["status"] = "completed"

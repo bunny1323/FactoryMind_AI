@@ -38,11 +38,12 @@ class Settings(BaseSettings):
     
     RERANKER_BACKEND: Literal["fallback", "cross_encoder"] = "cross_encoder"
     RERANKER_MODEL: str = "BAAI/bge-reranker-base"
-    RAG_MIN_RELEVANCE_SCORE: float = 0.35
+    RAG_MIN_RELEVANCE_SCORE: float = 0.20  # Reduced from 0.35 to allow more results (CrossEncoder scale: filters documents with relevance < 20%)
 
     # LLM Settings
     # Providers: 'mock', 'groq', 'openai', 'openai_compatible', 'ollama', 'anthropic'
-    LLM_PROVIDER: Literal["mock", "groq", "openai", "openai_compatible", "ollama", "anthropic"] = "mock"
+    # IMPORTANT: Set to actual provider (groq/openai/anthropic/ollama) - NOT mock for production!
+    LLM_PROVIDER: Literal["mock", "groq", "openai", "openai_compatible", "ollama", "anthropic"] = "groq"
     LLM_FALLBACK_PROVIDER: Literal["mock", "groq", "openai", "openai_compatible", "ollama", "anthropic"] = "mock"
     LLM_MAX_RETRIES: int = 3
     LLM_RETRY_DELAY: float = 1.0  # seconds

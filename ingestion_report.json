@@ -1,0 +1,21 @@
+{
+  "timestamp": "2026-07-30T00:44:03.684534",
+  "total_manuals": 0,
+  "total_pages": 0,
+  "total_chunks": 0,
+  "total_images": 0,
+  "total_tables": 0,
+  "ocr_engine_used": "PyMuPDF",
+  "table_extractor_used": "pdfplumber",
+  "manuals": [],
+  "dependency_status": {
+    "docling": false,
+    "paddleocr": true,
+    "easyocr": false,
+    "tesseract": false,
+    "pymupdf": true,
+    "pdfplumber": true,
+    "camelot": false,
+    "poppler": false
+  }
+}

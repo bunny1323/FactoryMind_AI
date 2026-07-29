@@ -161,9 +161,9 @@ class RagService:
             
         # Synchronous retrieval across collections
         results = {}
+        filters = {"user_id": user_id} if user_id != "default_user" else None
         for coll in collections:
             try:
-                filters = {"user_id": user_id} if coll in ["manuals", "sop"] else None
                 # Retrieve Top 30 per collection for better RRF input
                 hits = self.vector_store.search(coll, search_query, top_k=30, filters=filters)
                 results[coll] = hits
@@ -208,7 +208,11 @@ class RagService:
                 flat_hits.append(hit)
 
         # 2. Rerank using CrossEncoder Reranker (Rerank top 50, keep top 8)
-        reranked_hits = self.reranker.rerank(query, flat_hits, top_k=8)
+        try:
+            reranked_hits = self.reranker.rerank(query, flat_hits, top_k=8)
+        except Exception as e:
+            logger.warning(f"Reranker failed ({e}). Using initial ranking.")
+            reranked_hits = sorted(flat_hits, key=lambda x: x.get("score", 0), reverse=True)[:8]
         
         # Filter by minimum score
         filtered_hits = [
@@ -254,7 +258,11 @@ class RagService:
             else:
                 context_blocks.append(f"[{ref}]\n{text}")
         
+        # Estimate tokens (rough: 1 token ≈ 4 chars)
+        max_context_chars = 3000  # ~750 tokens, leaving room for query
         context = "\n\n".join(context_blocks)
+        if len(context) > max_context_chars:
+            context = context[:max_context_chars] + "\n[... content truncated ...]"
 
         # 5. Synthesize final answer using LLM with language instruction
         enhanced_system_rules = f"{SYSTEM_RULES}\n\n{language_instruction}"

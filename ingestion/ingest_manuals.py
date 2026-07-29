@@ -142,7 +142,7 @@ def run_ocr_on_page(doc: Any, page_num: int) -> str:
         import numpy as np
         ocr_engine = PaddleOCR(use_angle_cls=True, lang='en')
         img_np = np.array(img)
-        result = ocr_engine.ocr(img_np, cls=True)
+        result = ocr_engine.ocr(img_np)  # Removed cls=True - newer PaddleOCR doesn't accept this parameter
         txts = []
         if result and result[0]:
             for line in result[0]:

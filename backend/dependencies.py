@@ -103,5 +103,24 @@ class Container:
             f"LLM_PROVIDER={settings.LLM_PROVIDER} ({provider})"
         )
 
+        # Fail-fast API key validation for non-mock providers
+        if provider not in ("mock", "ollama") and not self._has_api_key_for_provider(provider):
+            raise RuntimeError(
+                f"LLM_PROVIDER='{provider}' configured but required API key not found in .env. "
+                f"Set GROQ_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY and restart."
+            )
+
+    def _has_api_key_for_provider(self, provider: str) -> bool:
+        """Check if provider has required API key."""
+        if provider == "groq":
+            return bool(getattr(settings, "GROQ_API_KEY", None))
+        elif provider in ("openai", "openai_compatible"):
+            return bool(getattr(settings, "OPENAI_API_KEY", None))
+        elif provider == "anthropic":
+            return bool(getattr(settings, "ANTHROPIC_API_KEY", None))
+        elif provider == "ollama":
+            return True  # Ollama doesn't require API key
+        return False
+
 
 container = Container()

@@ -67,32 +67,25 @@ class Container:
         else:
             logger.warning(f"RERANKER: CrossEncoder not available - fell back to offline FallbackReranker.")
 
-        # Log LLM status
         provider = settings.LLM_PROVIDER.lower()
-        openai_key = getattr(settings, "OPENAI_API_KEY", None)
+        gemini_key = getattr(settings, "GEMINI_API_KEY", None)
+        openrouter_key = getattr(settings, "OPENROUTER_API_KEY", None)
         groq_key = getattr(settings, "GROQ_API_KEY", None)
-        anthropic_key = getattr(settings, "ANTHROPIC_API_KEY", None)
 
         if provider == "groq" and groq_key:
-            logger.info(f"LLM PROVIDER: Groq loaded (model={settings.GROQ_MODEL}, key={groq_key[:12]}...)")
-        elif provider in ("openai", "openai_compatible") and openai_key:
-            base_url = getattr(settings, "OPENAI_BASE_URL", "https://api.openai.com/v1")
-            logger.info(
-                f"LLM PROVIDER: {provider} loaded "
-                f"(model={settings.OPENAI_MODEL}, base_url={base_url}, key={openai_key[:12]}...)"
-            )
+            logger.info(f"LLM PROVIDER: Groq loaded (model={settings.GROQ_MODEL}, key={groq_key[:8]}...)")
+        elif provider == "gemini" and gemini_key:
+            logger.info(f"LLM PROVIDER: Gemini loaded (model={settings.GEMINI_MODEL}, key={gemini_key[:8]}...)")
+        elif provider == "openrouter" and openrouter_key:
+            logger.info(f"LLM PROVIDER: OpenRouter loaded (model={settings.OPENROUTER_MODEL}, key={openrouter_key[:8]}...)")
         elif provider == "ollama":
             logger.info(f"LLM PROVIDER: Ollama loaded (url={settings.OLLAMA_URL}, model={settings.OLLAMA_MODEL})")
-        elif provider == "anthropic" and anthropic_key:
-            logger.info(f"LLM PROVIDER: Anthropic loaded (model={settings.ANTHROPIC_MODEL}, key={anthropic_key[:12]}...)")
         elif provider == "mock":
             logger.info("LLM PROVIDER: Mock mode — no real LLM will be called.")
         else:
-            # This branch means provider is set but API key is genuinely missing/empty
-            logger.error(
+            logger.warning(
                 f"LLM PROVIDER: '{settings.LLM_PROVIDER}' configured but the required API key is "
-                f"missing or empty in .env — check OPENAI_API_KEY / GROQ_API_KEY etc. "
-                f"All queries will return extractive fallback only."
+                f"missing or empty in .env — all queries will use extractive fallback."
             )
 
         # Explicit startup confirmation
@@ -103,21 +96,21 @@ class Container:
             f"LLM_PROVIDER={settings.LLM_PROVIDER} ({provider})"
         )
 
-        # Fail-fast API key validation for non-mock providers
+        # Fail-fast API key validation — warn but do NOT crash (fallback chain handles missing keys)
         if provider not in ("mock", "ollama") and not self._has_api_key_for_provider(provider):
-            raise RuntimeError(
-                f"LLM_PROVIDER='{provider}' configured but required API key not found in .env. "
-                f"Set GROQ_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY and restart."
+            logger.warning(
+                f"LLM_PROVIDER='{provider}' configured but the primary API key is not set. "
+                f"The fallback chain (Ollama → OpenRouter) will be used instead."
             )
 
     def _has_api_key_for_provider(self, provider: str) -> bool:
         """Check if provider has required API key."""
         if provider == "groq":
             return bool(getattr(settings, "GROQ_API_KEY", None))
-        elif provider in ("openai", "openai_compatible"):
-            return bool(getattr(settings, "OPENAI_API_KEY", None))
-        elif provider == "anthropic":
-            return bool(getattr(settings, "ANTHROPIC_API_KEY", None))
+        elif provider == "gemini":
+            return bool(getattr(settings, "GEMINI_API_KEY", None))
+        elif provider == "openrouter":
+            return bool(getattr(settings, "OPENROUTER_API_KEY", None))
         elif provider == "ollama":
             return True  # Ollama doesn't require API key
         return False

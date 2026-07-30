@@ -39,7 +39,7 @@ app.add_middleware(
 )
 
 # Include route modules
-from backend.routes import auth, query, ingestion, admin, machines, debug, reports, prediction
+from backend.routes import auth, query, ingestion, admin, machines, reports, prediction
 from prediction.router import router as prediction_router
 
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
@@ -47,7 +47,6 @@ app.include_router(query.router, tags=["Query"])
 app.include_router(ingestion.router, tags=["Ingestion"])
 app.include_router(admin.router, tags=["Admin"])
 app.include_router(machines.router, tags=["Machines"])
-app.include_router(debug.router, prefix="/debug", tags=["Debug"])
 app.include_router(reports.router, prefix="/reports", tags=["Reports"])
 app.include_router(prediction.router, tags=["Prediction"])
 app.include_router(prediction_router)

@@ -41,21 +41,23 @@ class Settings(BaseSettings):
     RAG_MIN_RELEVANCE_SCORE: float = 0.20  # Reduced from 0.35 to allow more results (CrossEncoder scale: filters documents with relevance < 20%)
 
     # LLM Settings
-    # Providers: 'mock', 'groq', 'openai', 'openai_compatible', 'ollama', 'anthropic'
-    # IMPORTANT: Set to actual provider (groq/openai/anthropic/ollama) - NOT mock for production!
-    LLM_PROVIDER: Literal["mock", "groq", "openai", "openai_compatible", "ollama", "anthropic"] = "groq"
-    LLM_FALLBACK_PROVIDER: Literal["mock", "groq", "openai", "openai_compatible", "ollama", "anthropic"] = "mock"
-    LLM_MAX_RETRIES: int = 3
-    LLM_RETRY_DELAY: float = 1.0  # seconds
+    # Providers: 'mock', 'groq', 'ollama', 'gemini', 'openrouter'
+    LLM_PROVIDER: Literal["mock", "groq", "ollama", "gemini", "openrouter"] = "groq"
+    LLM_FALLBACK_PROVIDER: Literal["mock", "groq", "ollama", "gemini", "openrouter"] = "ollama"
+    LLM_MAX_RETRIES: int = 2
+    LLM_RETRY_DELAY: float = 2.0  # seconds
+
     GROQ_API_KEY: str | None = None
     GROQ_MODEL: str = "llama-3.3-70b-versatile"
-    OPENAI_API_KEY: str | None = None
-    OPENAI_MODEL: str = "gpt-4o-mini"
-    OPENAI_BASE_URL: str = "https://api.openai.com/v1"
+    
+    GEMINI_API_KEY: str | None = None
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+    
+    OPENROUTER_API_KEY: str | None = None
+    OPENROUTER_MODEL: str = "qwen/qwen-2.5-30b-a3b-instruct"
+    
     OLLAMA_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "qwen2.5:7b"
-    ANTHROPIC_API_KEY: str | None = None
-    ANTHROPIC_MODEL: str = "claude-3-5-sonnet-latest"
     
     # Neo4j Settings
     NEO4J_URI: str | None = None
@@ -83,14 +85,11 @@ class Settings(BaseSettings):
         """Validate LLM provider has required API keys."""
         provider = self.LLM_PROVIDER
         
-        if provider == "groq" and not self.GROQ_API_KEY:
-            logger.warning("LLM_PROVIDER is 'groq' but GROQ_API_KEY is not set. Queries will use extractive fallback.")
+        if provider == "gemini" and not self.GEMINI_API_KEY:
+            logger.warning("LLM_PROVIDER is 'gemini' but GEMINI_API_KEY is not set. Queries will use extractive fallback.")
         
-        if provider in ("openai", "openai_compatible") and not self.OPENAI_API_KEY:
-            logger.warning(f"LLM_PROVIDER is '{provider}' but OPENAI_API_KEY is not set. Queries will use extractive fallback.")
-        
-        if provider == "anthropic" and not self.ANTHROPIC_API_KEY:
-            logger.warning("LLM_PROVIDER is 'anthropic' but ANTHROPIC_API_KEY is not set. Queries will use extractive fallback.")
+        if provider == "openrouter" and not self.OPENROUTER_API_KEY:
+            logger.warning("LLM_PROVIDER is 'openrouter' but OPENROUTER_API_KEY is not set. Queries will use extractive fallback.")
         
         if provider == "ollama":
             logger.info(f"LLM_PROVIDER is 'ollama' - ensure Ollama is running at {self.OLLAMA_URL}")

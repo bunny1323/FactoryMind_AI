@@ -79,10 +79,20 @@ class QdrantInitializer:
                         )
                     },
                 )
-                logger.info(f"Created Qdrant collection '{collection}' (dense dim={self.dimension}).")
+                logger.info(f"Created Qdrant collection '{collection}' (dense dim={self.dimension}, sparse enabled).")
             except Exception as create_err:
                 logger.error(f"Failed to create collection '{collection}': {create_err}")
                 return
+        else:
+            # Check if sparse vectors are missing in existing collection
+            try:
+                info = self.client.get_collection(collection)
+                has_sparse = hasattr(info.config.params, 'sparse_vectors_config') and info.config.params.sparse_vectors_config
+                if not has_sparse:
+                    logger.warning(f"Collection '{collection}' exists but lacks sparse vectors. Hybrid retrieval will be degraded.")
+                    logger.warning(f"Consider recreating '{collection}' with sparse vectors enabled.")
+            except Exception as check_err:
+                logger.warning(f"Could not check sparse vectors for '{collection}': {check_err}")
 
         # Ensure payload indexes idempotently
         for field_name in INDEX_FIELDS:

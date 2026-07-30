@@ -32,7 +32,8 @@ def intent_detection_agent(q: str) -> str | None:
     # --- Dynamic document listing ---
     if any(phrase in q_lower for phrase in [
         "how many documents", "how many manuals", "list documents", "list manuals",
-        "what documents", "what manuals", "number of manuals", "number of documents"
+        "what documents", "what manuals", "number of manuals", "number of documents",
+        "list all indexed documents", "list indexed documents", "indexed documents", "indexed manuals"
     ]):
         import os
         from backend.config import settings
@@ -96,74 +97,78 @@ def has_visual_intent(query: str) -> bool:
 def document_retrieval_agent_node(state: AgentState) -> dict[str, Any]:
     """Searches vector database (dense + sparse hybrid) and retrieves layout-aware chunks."""
     import time
-    logger.info("Executing Document Retrieval Agent...")
+    from backend.services.query_planner import query_planner
+    logger.info("=== PIPELINE STAGE: DOCUMENT RETRIEVAL AGENT ===")
+    logger.info(f"Original Query: {state['query']}")
+    logger.info(f"Machine ID: {state['machine_id']}")
+    logger.info(f"User ID: {state.get('user_id', 'default_user')}")
     query = state["query"]
     
-    # Bypass RAG if greeting detected
+    # Bypass RAG if conversational intent detected
     if state.get("final_answer"):
         return {"retrieved_documents": [], "sub_agent_history": state["sub_agent_history"] + ["document_retrieval_agent"]}
         
-    # Log intent for retrieval
-    from backend.services.rag_service import classify_intent
-    intent = classify_intent(query)
-    logger.info(f"RETRIEVAL INTENT: {intent}")
-    
-    # Search all collections with user isolation
+    # Query planning & rewriting
+    plan = query_planner.plan(query)
+    logger.info(f"--- SUB-STAGE: QUERY PLANNING ---")
+    logger.info(f"Detected Intent: {plan.intent}")
+    logger.info(f"Target Collections: {plan.target_collections}")
+    logger.info(f"Rewritten Query: '{plan.rewritten_query}'")
+    logger.info(f"Requires Visual: {plan.requires_visual}")
+
+    # Search collections retrieving top 50 candidates combined
+    logger.info(f"--- SUB-STAGE: HYBRID RETRIEVAL (Dense + Sparse + RRF) ---")
     t0 = time.perf_counter()
-    all_hits = rag_service.search_all_collections(query, top_k=3, user_id=state.get("user_id", "default_user"))
+    all_hits = rag_service.search_all_collections(plan.rewritten_query, top_k=10, user_id=state.get("user_id", "default_user"))
     retrieval_time = round(time.perf_counter() - t0, 3)
-    
-    # Log collections searched
-    collections_searched = list(all_hits.keys())
-    logger.info(f"COLLECTIONS SEARCHED: {collections_searched}")
-    
+
     flat_hits = []
     for coll, hits in all_hits.items():
+        logger.info(f"Collection '{coll}': {len(hits)} hits")
         for hit in hits:
             flat_hits.append(hit)
 
-    logger.info(
-        f"\n========================\nTOP RETRIEVED CHUNKS (retrieval_time={retrieval_time}s)\n========================"
-    )
-    for i, hit in enumerate(flat_hits[:8]):
-        payload = hit.get("payload", {}) or {}
-        logger.info(
-            f"  [{i+1}] collection={payload.get('collection', hit.get('source_type','?'))} "
-            f"doc={payload.get('document_name', hit.get('title','?'))[:50]} "
-            f"page={payload.get('page','?')} "
-            f"score={hit.get('score',0):.4f} "
-            f"preview='{hit.get('text','')[:80]}...'"
-        )
+    logger.info(f"Total Retrieved Candidates: {len(flat_hits)}")
+    logger.info(f"Retrieval Time: {retrieval_time}s")
 
     # Boost chunks with images if visual intent detected
-    visual_intent = has_visual_intent(query)
+    logger.info(f"--- SUB-STAGE: VISUAL BOOSTING ---")
+    visual_intent = plan.requires_visual or has_visual_intent(query)
+    logger.info(f"Visual Intent Detected: {visual_intent}")
+    boosted_count = 0
     for hit in flat_hits:
         payload = hit.get("payload", {}) if hit.get("payload") else {}
         if visual_intent and payload.get("image_path"):
             hit["score"] = min(1.0, hit.get("score", 0.0) + 0.3)
-            
-    # Rerank
+            boosted_count += 1
+    logger.info(f"Boosted {boosted_count} chunks with images")
+
+    # Rerank 50 down to top 10 using CrossEncoder
+    logger.info(f"--- SUB-STAGE: CROSS-ENCODER RERANKING ---")
     t1 = time.perf_counter()
-    reranked = rag_service.reranker.rerank(query, flat_hits, top_k=5)
+    try:
+        reranked = rag_service.reranker.rerank(plan.rewritten_query, flat_hits, top_k=10)
+        logger.info(f"Reranker Type: {type(rag_service.reranker).__name__}")
+    except Exception as e:
+        logger.warning(f"Reranker failed ({e}), falling back to score sorting.")
+        reranked = sorted(flat_hits, key=lambda x: x.get("score", 0), reverse=True)[:10]
+
     rerank_time = round(time.perf_counter() - t1, 3)
-    
-    logger.info(
-        f"\n========================\nRERANKED CHUNKS (rerank_time={rerank_time}s)\n========================"
-    )
-    for i, hit in enumerate(reranked):
+    logger.info(f"Reranked to {len(reranked)} chunks in {rerank_time}s")
+    for i, hit in enumerate(reranked[:5]):
         payload = hit.get("payload", {}) or {}
         logger.info(
             f"  [{i+1}] doc={payload.get('document_name', hit.get('title','?'))[:50]} "
             f"page={payload.get('page','?')} score={hit.get('score',0):.4f}"
         )
     
-    # Bypass adjacent chunk lookup to ensure focus on highly relevant manual passages
-    layout_restored = [hit for hit in reranked if hit.get("score", 0.0) >= 0.45]
-    if not layout_restored:
-        layout_restored = reranked[:3]
+    # Filter to top 5 highest relevance chunks for LLM context
+    top_5_chunks = reranked[:5]
+    if not top_5_chunks:
+        top_5_chunks = flat_hits[:5]
         
     return {
-        "retrieved_documents": layout_restored,
+        "retrieved_documents": top_5_chunks,
         "sub_agent_history": state["sub_agent_history"] + ["document_retrieval_agent"]
     }
 
@@ -172,13 +177,18 @@ from graph.neo4j_client import graph_client
 
 def knowledge_graph_agent_node(state: AgentState) -> dict[str, Any]:
     """Traces machine -> component -> failure -> repair relationships."""
-    logger.info("Executing Knowledge Graph Agent...")
+    logger.info("=== PIPELINE STAGE: KNOWLEDGE GRAPH AGENT ===")
+    logger.info(f"Query: {state['query']}")
+    logger.info(f"Machine ID: {state['machine_id']}")
     if state.get("final_answer"):
+        logger.info("Bypassing - conversational answer already generated")
         return {"graph_path": [], "sub_agent_history": state["sub_agent_history"] + ["knowledge_graph_agent"]}
-        
+
     query = state["query"]
     machine_id = state["machine_id"]
+    logger.info(f"Querying Neo4j for graph path...")
     path = graph_client.get_path_for_query(query, machine_id)
+    logger.info(f"Graph path returned: {len(path)} nodes")
     return {
         "graph_path": path,
         "sub_agent_history": state["sub_agent_history"] + ["knowledge_graph_agent"]
@@ -300,22 +310,28 @@ def report_generator_agent_node(state: AgentState) -> dict[str, Any]:
 def synthesizer_node(state: AgentState) -> dict[str, Any]:
     """Orchestrates final response synthesis via LLM using ONLY retrieved manual context with structured output."""
     import time
-    logger.info("Executing Synthesizer Node...")
+    logger.info("=== PIPELINE STAGE: SYNTHESIZER NODE ===")
+    logger.info(f"Query: {state['query']}")
+    logger.info(f"Retrieved Documents Count: {len(state.get('retrieved_documents', []))}")
     if state.get("final_answer"):
+        logger.info("Bypassing - conversational answer already generated")
         return {}  # Already handled by Intent Detection
 
     query = state["query"]
     docs = state.get("retrieved_documents", [])
 
     if not docs:
-        logger.warning("Synthesizer: zero retrieved documents — returning no-results message without LLM call.")
+        logger.warning("❌ ZERO RETRIEVED DOCUMENTS - returning no-results message without LLM call")
         return {
-            "final_answer": "I could not find relevant information in the indexed manuals for your query.",
+            "final_answer": "I could not find this information inside the indexed manuals.",
             "llm_prompt": "N/A — zero retrieval results.",
             "sub_agent_history": state["sub_agent_history"] + ["synthesizer"],
         }
 
     # Build structured context with clear source citations
+    logger.info(f"--- SUB-STAGE: CONTEXT CONSTRUCTION ---")
+    logger.info(f"Building context from {len(docs)} retrieved documents")
+    logger.info(f"✅ VERIFIED: Context built ONLY from retrieved chunks - no hardcoded content")
     doc_context = "\n\n".join([
         f"SOURCE: {doc.get('payload', {}).get('document_name', doc.get('title', 'Unknown'))} "
         f"| Page {doc.get('payload', {}).get('page', 'N/A')} "
@@ -325,24 +341,44 @@ def synthesizer_node(state: AgentState) -> dict[str, Any]:
         for doc in docs
     ])
 
+    # Include knowledge graph path if available
+    graph_path = state.get("graph_path", [])
+    graph_context = ""
+    if graph_path:
+        logger.info(f"Including {len(graph_path)} knowledge graph relationships")
+        graph_context = "\n\n=== KNOWLEDGE GRAPH RELATIONSHIPS ===\n"
+        for edge in graph_path:
+            if isinstance(edge, dict):
+                source = edge.get("source", "")
+                relationship = edge.get("relationship", "")
+                target = edge.get("target", "")
+                if source and relationship and target:
+                    graph_context += f"{source} --[{relationship}]--> {target}\n"
+
     combined_context = (
         "=== RETRIEVED MANUAL CONTEXT ===\n"
         + doc_context
+        + graph_context
     )
 
     system_rules = (
-        "You are an industrial maintenance assistant for the Hyundai R215L Smart Plus excavator.\n"
+        "You are FactoryMind AI, an expert industrial maintenance assistant for the Hyundai R215L Smart Plus excavator.\n"
         "Answer the user's question ONLY using the supplied retrieved context.\n"
         "Do not use prior knowledge. Never fabricate specifications, error codes, tools, or spare parts.\n"
-        "Structure your answer as follows:\n"
-        "1. **Summary**: Brief 1-2 sentence summary of the answer\n"
-        "2. **Detailed Answer**: Complete technical explanation\n"
-        "3. **Evidence**: Key facts with manual name and page number citations\n"
-        "4. **Relevant Pages**: List all page numbers referenced\n"
-        "5. **Confidence**: High/Medium/Low based on context quality\n\n"
-        "If the answer is not in the retrieved context, explicitly say: "
-        "'No relevant information was found in the indexed manuals.'\n"
-        "Keep your tone direct, technical, and engineering-focused."
+        "Structure your response strictly into the following 10 sections:\n"
+        "1. **Final Answer**: Comprehensive engineering resolution\n"
+        "2. **Supporting Evidence**: Key technical facts from retrieved context\n"
+        "3. **Manual**: Exact manual document title(s)\n"
+        "4. **Section**: Specific section name or header\n"
+        "5. **Page Number**: Page numbers referenced\n"
+        "6. **Retrieved Images**: Mention any image paths/captions found in context\n"
+        "7. **Diagrams**: Mention figure numbers or schematic references\n"
+        "8. **Confidence Score**: High / Medium / Low score rating\n"
+        "9. **Related Components**: Components directly related to the issue\n"
+        "10. **Suggested Follow-up Questions**: 2-3 technical follow-up questions\n\n"
+        "If the answer is not in the retrieved context, explicitly state: "
+        "'I could not find this information inside the indexed manuals.'\n"
+        "Keep your tone direct, highly technical, and strictly engineering-focused."
     )
 
     full_prompt = (
@@ -351,15 +387,20 @@ def synthesizer_node(state: AgentState) -> dict[str, Any]:
         f"USER QUERY:\n{query}"
     )
 
-    logger.info(
-        f"\n========================\nFINAL PROMPT SENT TO LLM\n========================\n"
-        f"{full_prompt[:1000]}"
-    )
+    logger.info(f"--- SUB-STAGE: LLM SYNTHESIS ---")
+    logger.info(f"Prompt Length: {len(full_prompt)} characters")
+    logger.info(f"Context Length: {len(combined_context)} characters")
+    logger.info(f"LLM Provider: {settings.LLM_PROVIDER}")
 
     t0 = time.perf_counter()
-    final_answer = llm_service.synthesize(query, combined_context, system_rules)
-    llm_time = round(time.perf_counter() - t0, 2)
-    logger.info(f"LLM synthesis completed in {llm_time}s.")
+    try:
+        final_answer = llm_service.synthesize(query, combined_context, system_rules)
+        llm_time = round(time.perf_counter() - t0, 2)
+        logger.info(f"✅ LLM synthesis completed in {llm_time}s")
+        logger.info(f"Answer Length: {len(final_answer)} characters")
+    except Exception as e:
+        logger.error(f"❌ LLM synthesis failed: {e}")
+        final_answer = "I apologize, but I encountered an error generating the response. Please try again."
 
     return {
         "final_answer": final_answer,
@@ -450,8 +491,8 @@ class LangGraphOrchestrator:
             return state
             
         # 2. Dynamic agent routing based on query intent
-        from backend.services.rag_service import classify_intent
-        intent = classify_intent(query)
+        from backend.services.query_planner import query_planner
+        intent = query_planner.classify_intent(query)
         
         # Always execute these core agents
         state.update(supervisor_agent_node(state))

@@ -25,7 +25,7 @@ body = json.dumps({
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "Hello, respond with 'Ollama is working'"},
     ],
-    "options": {"temperature": 0.15},
+    "options": {"temperature": 0.2, "num_ctx": 768},
     "stream": False,
 }).encode("utf-8")
 

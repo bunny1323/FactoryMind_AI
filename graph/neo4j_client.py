@@ -1,161 +1,118 @@
+"""
+FactoryMind AI — Lightweight In-Memory Knowledge Graph
+Replaces Neo4j with zero external database dependencies.
+Fast, reliable, and completely held in RAM.
+"""
 from __future__ import annotations
 
-import os
 import logging
-from typing import Any, Dict, List, Tuple
-from backend.config import settings
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("factorymind")
 
-class GraphDatabaseClient:
+class InMemoryKnowledgeGraph:
+    """Lightweight in-memory entity & relationship store."""
+
     def __init__(self):
-        self.driver = None
-        self.local_graph = {
-            "M101": {
-                "components": ["Kawasaki K3V112DT Main Pump", "Cummins 6BTAA5.9 Engine", "Turntable Bearing"],
-                "relations": [
-                    {"source": "M101", "relationship": "HAS_COMPONENT", "target": "Kawasaki K3V112DT Main Pump"},
-                    {"source": "Kawasaki K3V112DT Main Pump", "relationship": "HAS_FAULT", "target": "Rotational Shaft Vibration"},
-                    {"source": "Rotational Shaft Vibration", "relationship": "RESOLVED_BY", "target": "SOP-MNT-R215-087 Shaft Alignment"},
-                    {"source": "SOP-MNT-R215-087 Shaft Alignment", "relationship": "REQUIRES_TOOL", "target": "Laser Shaft Alignment Tool"},
-                    {"source": "SOP-MNT-R215-087 Shaft Alignment", "relationship": "REQUIRES_SPARE_PART", "target": "Slewing & Main Pump Bearing Kit (SP-BRG-215)"},
-                    {"source": "SOP-MNT-R215-087 Shaft Alignment", "relationship": "HAS_WARNING", "target": "Ensure engine is shut off and pressure relieved"},
-                    {"source": "SOP-MNT-R215-087 Shaft Alignment", "relationship": "HAS_MANUAL_SECTION", "target": "Section 4: Pump Component Mounting Torque"},
-                    
-                    {"source": "M101", "relationship": "HAS_COMPONENT", "target": "Turntable Bearing"},
-                    {"source": "Turntable Bearing", "relationship": "HAS_FAULT", "target": "Radial Bearing Clearance Wear"},
-                    {"source": "Radial Bearing Clearance Wear", "relationship": "RESOLVED_BY", "target": "Clearance Check & Grease Analysis"},
-                    {"source": "Clearance Check & Grease Analysis", "relationship": "REQUIRES_TOOL", "target": "Dial Indicator Gauges"},
-                    {"source": "Clearance Check & Grease Analysis", "relationship": "REQUIRES_SPARE_PART", "target": "Turntable Bearing Seal Replacement"},
-                    {"source": "Clearance Check & Grease Analysis", "relationship": "HAS_WARNING", "target": "Do not rotate upper structure with gauges attached"},
-                    {"source": "Clearance Check & Grease Analysis", "relationship": "HAS_MANUAL_SECTION", "target": "Section 12: Upper Structure Lubrication"},
-                ]
+        self.graph: Dict[str, Dict[str, Any]] = {
+            "Hyundai R215L Smart Plus": {
+                "type": "Machine",
+                "components": [
+                    "Kawasaki K3V112DT Main Pump", "Cummins 6BTAA5.9 Engine",
+                    "Turntable Bearing", "Main Control Valve", "Engine Oil Filter"
+                ],
+                "failure_modes": ["Excessive Structural Vibration", "Boom Drift", "Overheating"],
+                "maintenance_steps": ["500-hour Oil Change", "Slewing Ring Lubrication", "Coupling Alignment"],
+                "referenced_pages": [1, 2, 4, 12]
             },
-            "M102": {
-                "components": ["Boom Hydraulic Cylinder", "Oil Return Filters"],
-                "relations": [
-                    {"source": "M102", "relationship": "HAS_COMPONENT", "target": "Boom Hydraulic Cylinder"},
-                    {"source": "Boom Hydraulic Cylinder", "relationship": "HAS_FAULT", "target": "Pressure Seal Leakage"},
-                    {"source": "Pressure Seal Leakage", "relationship": "RESOLVED_BY", "target": "Boom Cylinder Seal Replacement SOP"},
-                    {"source": "Boom Cylinder Seal Replacement SOP", "relationship": "REQUIRES_TOOL", "target": "Seal Puller Wrench"},
-                    {"source": "Boom Cylinder Seal Replacement SOP", "relationship": "REQUIRES_SPARE_PART", "target": "Boom Cylinder Seal Kit (SP-SEL-401)"},
-                    {"source": "Boom Cylinder Seal Replacement SOP", "relationship": "HAS_WARNING", "target": "Support boom structure using support stands"},
-                    {"source": "Boom Cylinder Seal Replacement SOP", "relationship": "HAS_MANUAL_SECTION", "target": "Section 8: Cylinder Disassembly & Reassembly"}
-                ]
+            "Kawasaki K3V112DT Main Pump": {
+                "type": "Pump",
+                "related_components": ["Main Control Valve", "Engine Flywheel", "Coupling Insert"],
+                "failure_modes": ["Bearing degradation", "Coupling insert wear", "Cavitation"],
+                "maintenance_steps": ["Measure vibration amplitude", "Inspect axial play", "Replace coupling"],
+                "referenced_pages": [7, 8, 24]
             },
-            "M103": {
-                "components": ["Slew Motor Casing", "Main Control Valve"],
-                "relations": [
-                    {"source": "M103", "relationship": "HAS_COMPONENT", "target": "Slew Motor Casing"},
-                    {"source": "Slew Motor Casing", "relationship": "HAS_FAULT", "target": "Slew Motor Seal Leakage"},
-                    {"source": "Slew Motor Seal Leakage", "relationship": "RESOLVED_BY", "target": "Slew Motor Reseal SOP"},
-                    {"source": "Slew Motor Reseal SOP", "relationship": "REQUIRES_TOOL", "target": "Standard Wrench Set"},
-                    {"source": "Slew Motor Reseal SOP", "relationship": "REQUIRES_SPARE_PART", "target": "Slew Motor O-ring kit"},
-                    {"source": "Slew Motor Reseal SOP", "relationship": "HAS_WARNING", "target": "Ensure hydraulic casing is depressurized"},
-                    {"source": "Slew Motor Reseal SOP", "relationship": "HAS_MANUAL_SECTION", "target": "Section 5: Slew Drive System"}
-                ]
+            "Cummins 6BTAA5.9 Engine": {
+                "type": "Engine",
+                "related_components": ["Engine Oil Filter", "Fuel Injectors", "Flywheel"],
+                "failure_modes": ["Low oil pressure", "High coolant temperature"],
+                "maintenance_steps": ["SAE 15W-40 Oil replacement", "Filter swap"],
+                "referenced_pages": [4, 5, 18]
             }
         }
-        self.connect()
+        self.triples: List[Dict[str, str]] = [
+            {"source": "Hyundai R215L Smart Plus", "relationship": "connected_to", "target": "Cummins 6BTAA5.9 Engine"},
+            {"source": "Cummins 6BTAA5.9 Engine", "relationship": "requires", "target": "SAE 15W-40 Engine Oil"},
+            {"source": "Cummins 6BTAA5.9 Engine", "relationship": "maintained_by", "target": "Engine Oil Filter (SP-FLT-101)"},
+            {"source": "Hyundai R215L Smart Plus", "relationship": "connected_to", "target": "Kawasaki K3V112DT Main Pump"},
+            {"source": "Kawasaki K3V112DT Main Pump", "relationship": "located_in", "target": "Hydraulic Circuit"},
+            {"source": "Rotational Shaft Vibration", "relationship": "causes", "target": "Main Pump Coupling Damage"}
+        ]
+        logger.info("✅ InMemoryKnowledgeGraph initialized successfully (No Neo4j required)")
 
-    def connect(self):
-        if settings.NEO4J_URI:
-            try:
-                from neo4j import GraphDatabase
-                logger.info(f"Connecting to Neo4j database at {settings.NEO4J_URI}...")
-                self.driver = GraphDatabase.driver(
-                    settings.NEO4J_URI, 
-                    auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD)
-                )
-                self.driver.verify_connectivity()
-                logger.info("Successfully verified connection to Neo4j Database.")
-            except Exception as e:
-                logger.error(f"Neo4j connection failed: {e}. Falling back to in-memory graph dictionary.")
-                self.driver = None
+    def add_entity(self, entity_name: str, entity_type: str, details: Dict[str, Any] = None):
+        """Add or update entity node in memory."""
+        node = self.graph.setdefault(entity_name, {
+            "type": entity_type,
+            "related_components": [],
+            "failure_modes": [],
+            "maintenance_steps": [],
+            "referenced_pages": []
+        })
+        if details:
+            for k, v in details.items():
+                if isinstance(v, list):
+                    node.setdefault(k, []).extend(v)
+                else:
+                    node[k] = v
+
+    def add_relationship(self, source: str, relationship: str, target: str):
+        """Add relationship triple."""
+        triple = {"source": source, "relationship": relationship, "target": target}
+        if triple not in self.triples:
+            self.triples.append(triple)
+
+    def query_graph(self, query_text: str) -> Dict[str, Any]:
+        """Retrieve relevant graph context for a query."""
+        query_lower = query_text.lower()
+        matched_nodes = {}
+        matched_relations = []
+
+        for entity, data in self.graph.items():
+            if entity.lower() in query_lower or any(word in entity.lower() for word in query_lower.split() if len(word) > 3):
+                matched_nodes[entity] = data
+
+        for triple in self.triples:
+            if triple["source"].lower() in query_lower or triple["target"].lower() in query_lower:
+                matched_relations.append(triple)
+
+        return {
+            "nodes": matched_nodes,
+            "relationships": matched_relations[:10]
+        }
 
     def close(self):
-        if self.driver:
-            self.driver.close()
+        """No-op for in-memory graph."""
+        pass
 
-    def ingest_triples(self, triples: list[tuple[str, str, str, str, str]]) -> int:
-        """Ingests (src_label, src_name, rel, dst_label, dst_name) triples."""
-        if not self.driver:
-            logger.info("Local In-Memory Mode: Simulating graph triples ingestion.")
-            return len(triples)
-            
-        cypher = """
-        MERGE (a:Label {name: $src_name})
-        SET a.type = $src_label
-        MERGE (b:Label {name: $dst_name})
-        SET b.type = $dst_label
-        WITH a, b
-        CALL apoc.create.relationship(a, $rel_type, {}, b) YIELD rel
-        RETURN count(rel)
-        """
-        
-        count = 0
-        with self.driver.session() as session:
-            for src_label, src_name, rel, dst_label, dst_name in triples:
-                try:
-                    # Clean label query (dynamic labels require parameterization precautions or APOC helper)
-                    # We will use basic cypher with node type properties
-                    session.run(
-                        "MERGE (aNode {name: $src_name, label: $src_label}) "
-                        "MERGE (bNode {name: $dst_name, label: $dst_label}) "
-                        "MERGE (aNode)-[r:RELATED {type: $rel}]->(bNode)",
-                        src_name=src_name, src_label=src_label,
-                        dst_name=dst_name, dst_label=dst_label,
-                        rel=rel
-                    )
-                    count += 1
-                except Exception as e:
-                    logger.error(f"Failed to ingest graph edge: {e}")
-        return count
 
-    def get_path_for_query(self, query: str, machine_id: str) -> list[dict[str, Any]]:
-        """Queries database for path context, defaulting to local dictionary if offline."""
-        query_lower = query.lower()
-        
-        # 1. Query Neo4j if driver is active
-        if self.driver:
-            try:
-                with self.driver.session() as session:
-                    # Traverses up to 3 relationship levels: Machine -> Component -> Failure -> Repair
-                    result = session.run(
-                        "MATCH (m {name: $machine_id})-[r:RELATED]->(c) "
-                        "RETURN m.name AS source, r.type AS relationship, c.name AS target "
-                        "UNION "
-                        "MATCH (m {name: $machine_id})-[:RELATED]->(c)-[r:RELATED]->(f) "
-                        "RETURN c.name AS source, r.type AS relationship, f.name AS target "
-                        "UNION "
-                        "MATCH (m {name: $machine_id})-[:RELATED]->(c)-[:RELATED]->(f)-[r:RELATED]->(rep) "
-                        "RETURN f.name AS source, r.type AS relationship, rep.name AS target",
-                        machine_id=machine_id
-                    )
-                    records = []
-                    for record in result:
-                        records.append({
-                            "source": record["source"],
-                            "relationship": record["relationship"],
-                            "target": record["target"]
-                        })
-                    if records:
-                        logger.info(f"Retrieved {len(records)} relationships from Neo4j DB.")
-                        return records
-            except Exception as e:
-                logger.error(f"Failed to query Neo4j for path: {e}. Falling back to local graph dictionary.")
-        
-        # 2. Local lookup fallback
-        relations = self.local_graph.get(machine_id, self.local_graph["M101"])["relations"]
-        
-        # Filter relations based on query keywords
-        if "vibration" in query_lower or "pump" in query_lower or "coupling" in query_lower:
-            return [r for r in relations if "Pump" in r["target"] or "Vibration" in r["target"] or "Alignment" in r["target"] or r["source"] == machine_id]
-        elif "bearing" in query_lower or "wear" in query_lower:
-            return [r for r in relations if "Bearing" in r["target"] or "Clearance" in r["target"] or "Check" in r["target"] or r["source"] == machine_id]
-        elif "leak" in query_lower or "seal" in query_lower:
-            return [r for r in relations if "Cylinder" in r["target"] or "Leakage" in r["target"] or "Replacement" in r["target"] or r["source"] == machine_id]
-            
-        return relations[:4]
+class GraphDatabaseClient(InMemoryKnowledgeGraph):
+    """Backward-compatible alias for existing imports."""
+
+    def is_connected(self) -> bool:
+        return True
+
+    def get_machine_subgraph(self, machine_id: str = "M101") -> Tuple[List[str], List[Dict[str, str]]]:
+        nodes = list(self.graph.keys())
+        return nodes, self.triples
+
+    def query_subgraph_by_keywords(self, keywords: List[str], max_nodes: int = 15) -> Dict[str, Any]:
+        return self.query_graph(" ".join(keywords))
+
+    def get_path_for_query(self, query: str, machine_id: str = "M101") -> List[Dict[str, Any]]:
+        """Retrieve matching graph relationship triples for a query."""
+        res = self.query_graph(query)
+        return res.get("relationships", [])
+
 
 graph_client = GraphDatabaseClient()

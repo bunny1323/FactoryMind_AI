@@ -210,6 +210,14 @@ export default function AskPage() {
 
       if (res.ok) {
         const data = await res.json();
+        
+        // Check if this is an extractive fallback response (LLM unavailable)
+        const isFallbackResponse = data.answer && (
+          data.answer.includes("LLM synthesis was unavailable") ||
+          data.answer.includes("Answer Based on Retrieved Context") ||
+          data.answer.includes("all_providers")
+        );
+        
         const assistantMsg: Message = {
           id: Math.random().toString(36).substring(7),
           role: "assistant",
@@ -219,6 +227,12 @@ export default function AskPage() {
           queryId: data.query_id,
           imageUrl: data.image_url || undefined
         };
+        
+        // Mark fallback responses for UI handling
+        if (isFallbackResponse) {
+          assistantMsg.text = `⚠️ **LLM Unavailable - Using Extractive Fallback**\n\n${data.answer}`;
+        }
+        
         const nextMsgs = [...updatedMessages, assistantMsg];
         saveHistory(nextMsgs);
         setActiveMessageId(assistantMsg.id);

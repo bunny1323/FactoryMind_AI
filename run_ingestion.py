@@ -14,8 +14,8 @@ def main():
     print("FactoryMind AI - Ingestion Pipeline Runner")
     print("="*70)
     
-    # Import refactored ingestion
-    from ingestion.ingest_manuals_refactored import ingest_manuals
+    # Import manuals ingestion
+    from ingestion.ingest_manuals import ingest_manuals
     
     print("\nRunning Manuals Ingestion (Refactored)...")
     print("-"*70)

@@ -172,23 +172,9 @@ class QdrantHybridVectorStore(VectorStore):
             )
             logger.info(f"Created collection '{collection}'.")
 
-        # Idempotently ensure the user_id payload index exists.
-        # Required for filtered queries on manuals and sop collections.
-        # Qdrant allows calling create_payload_index even if the index already exists.
-        try:
-            self.client.create_payload_index(
-                collection_name=collection,
-                field_name="user_id",
-                field_schema="keyword",
-            )
-            logger.info(f"Payload index on 'user_id' ensured for collection '{collection}'.")
-        except Exception as idx_err:
-            # Ignore "already exists" errors; log anything unexpected.
-            err_str = str(idx_err).lower()
-            if "already exists" in err_str or "conflict" in err_str:
-                logger.debug(f"user_id index already exists for '{collection}' — OK.")
-            else:
-                logger.warning(f"Could not create user_id payload index for '{collection}': {idx_err}")
+        # Note: Payload indexes are created by QdrantInitializer at startup only
+        # This prevents repeated index creation during upsert operations
+        # See backend/dependencies.py for initialization
 
 
     def upsert(self, collection: str, records: list[dict[str, Any]]) -> int:
@@ -237,27 +223,39 @@ class QdrantHybridVectorStore(VectorStore):
 
     def search(self, collection: str, query: str, top_k: int, filters: dict[str, Any] | None = None) -> list[dict[str, Any]]:
         # Startup initializer guarantees collections & indexes exist. Skip per-query checks for maximum speed.
+        logger.info(f"--- HYBRID SEARCH: Collection='{collection}' Query='{query}' top_k={top_k} ---")
+
         q_filter = None
         if filters:
             must = [self.models.FieldCondition(key=key, match=self.models.MatchValue(value=value)) for key, value in filters.items() if value is not None]
             q_filter = self.models.Filter(must=must) if must else None
-        
+            logger.info(f"Metadata Filters: {filters}")
+
+        # Encode dense vector
+        dense_vec = self.embedder.encode(query)
+        logger.info(f"Dense Vector: dim={len(dense_vec)} type={type(dense_vec).__name__}")
+
+        # Encode sparse vector
         sparse = self.sparse_embedder.encode(query)
+        logger.info(f"Sparse Vector: indices={len(sparse.indices)} values={len(sparse.values)} type={type(sparse).__name__}")
+
         prefetch_limit = max(top_k * 4, 20)
-        
+        logger.info(f"Prefetch Limit: {prefetch_limit} per vector type")
+
         try:
             response = self.client.query_points(
                 collection_name=collection,
                 prefetch=[
-                    self.models.Prefetch(query=self.embedder.encode(query), using="dense", limit=prefetch_limit, filter=q_filter),
+                    self.models.Prefetch(query=dense_vec, using="dense", limit=prefetch_limit, filter=q_filter),
                     self.models.Prefetch(query=self.models.SparseVector(indices=sparse.indices, values=sparse.values), using="sparse", limit=prefetch_limit, filter=q_filter),
                 ],
                 query=self.models.FusionQuery(fusion=self.models.Fusion.RRF),
                 limit=top_k,
                 with_payload=True,
             )
+            logger.info(f"Qdrant RRF Fusion returned {len(response.points)} points")
         except Exception as err:
-            logger.warning(f"Qdrant query_points failed for collection '{collection}': {err}")
+            logger.error(f"❌ Qdrant query_points failed for collection '{collection}': {err}")
             return []
         
         results = []

@@ -1,4 +1,4 @@
-"""Language detection and multilingual support service."""
+"""Language detection and multilingual support service for FactoryMind AI."""
 from __future__ import annotations
 
 import logging
@@ -9,97 +9,79 @@ logger = logging.getLogger("factorymind")
 
 
 class LanguageService:
-    """Service for language detection and multilingual support."""
-    
-    # Common language patterns
-    LANGUAGE_PATTERNS = {
-        "en": ["the", "is", "at", "which", "on", "and", "a", "an", "in", "to"],
-        "es": ["el", "la", "de", "que", "y", "a", "en", "un", "es", "se"],
-        "fr": ["le", "la", "de", "et", "à", "un", "il", "être", "et", "en"],
-        "de": ["der", "die", "das", "und", "in", "den", "von", "zu", "das", "mit"],
-        "zh": ["的", "是", "在", "和", "有", "不", "这", "我", "他", "她"],
-        "ja": ["の", "は", "を", "に", "が", "で", "と", "た", "です", "ます"],
-        "ko": ["의", "는", "을", "에", "가", "에서", "과", "를", "입니다", "입니다"],
-        "ru": ["и", "в", "не", "на", "я", "с", "что", "а", "по", "это"],
-        "pt": ["o", "a", "de", "e", "do", "da", "em", "um", "para", "é"],
-        "it": ["il", "la", "di", "e", "in", "un", "è", "per", "a", "da"]
-    }
+    """
+    Service for language detection and multilingual support.
+    Supports English, Hindi, Telugu, Tamil, Kannada, Malayalam and major global languages.
+    Retrieves in English, synthesizes in user's language.
+    """
     
     LANGUAGE_NAMES = {
         "en": "English",
+        "hi": "Hindi",
+        "te": "Telugu",
+        "ta": "Tamil",
+        "kn": "Kannada",
+        "ml": "Malayalam",
         "es": "Spanish",
         "fr": "French",
-        "de": "German",
-        "zh": "Chinese",
-        "ja": "Japanese",
-        "ko": "Korean",
-        "ru": "Russian",
-        "pt": "Portuguese",
-        "it": "Italian"
+        "de": "German"
+    }
+
+    UNICODE_RANGES = {
+        "hi": (0x0900, 0x097F),  # Devanagari
+        "te": (0x0C00, 0x0C7F),  # Telugu
+        "ta": (0x0B80, 0x0BFF),  # Tamil
+        "kn": (0x0C80, 0x0CFF),  # Kannada
+        "ml": (0x0D00, 0x0D7F),  # Malayalam
     }
     
     def __init__(self):
         self.default_language = "en"
-        logger.info("LanguageService initialized with multilingual support")
+        logger.info("LanguageService initialized with multilingual support (EN, HI, TE, TA, KN, ML).")
     
     def detect_language(self, text: str) -> str:
         """
-        Detect the language of the input text using pattern matching.
-        Returns ISO 639-1 language code.
+        Detect the language of the input text using Unicode script detection and pattern matching.
         """
-        if not text or len(text.strip()) < 3:
+        if not text or len(text.strip()) < 2:
             return self.default_language
         
+        # 1. Unicode Script Range Check (High accuracy for Indian scripts)
+        for char in text:
+            code = ord(char)
+            for lang, (start, end) in self.UNICODE_RANGES.items():
+                if start <= code <= end:
+                    logger.info(f"Script-detected language: {self.LANGUAGE_NAMES[lang]} ({lang})")
+                    return lang
+        
+        # 2. Text keyword detection for transliterated text
         text_lower = text.lower()
-        scores = {}
-        
-        # Score each language based on pattern matches
-        for lang, patterns in self.LANGUAGE_PATTERNS.items():
-            score = sum(1 for pattern in patterns if pattern in text_lower)
-            if score > 0:
-                scores[lang] = score
-        
-        # Return language with highest score, or default
-        if scores:
-            detected_lang = max(scores, key=scores.get)
-            logger.debug(f"Detected language: {detected_lang} (score: {scores[detected_lang]})")
-            return detected_lang
-        
+        if any(w in text_lower for w in ["kya", "kaise", "batao", "telugu", "kannada", "tamil"]):
+            if "batao" in text_lower or "kya" in text_lower:
+                return "hi"
+
         return self.default_language
     
     def get_system_prompt_language(self, detected_lang: str) -> str:
-        """Get language-specific system prompt instructions."""
+        """Get language-specific system prompt instructions for final LLM synthesis."""
         language_instructions = {
-            "en": "Respond in English.",
+            "en": "Respond strictly in English.",
+            "hi": "Respond in Hindi (हिंदी में उत्तर दें). Translate technical findings clearly into Hindi.",
+            "te": "Respond in Telugu (తెలుగులో సమాధానం ఇవ్వండి). Translate technical findings clearly into Telugu.",
+            "ta": "Respond in Tamil (தமிழில் பதிலளிக்கவும்). Translate technical findings clearly into Tamil.",
+            "kn": "Respond in Kannada (ಕನ್ನಡದಲ್ಲಿ ಉತ್ತರಿಸಿ). Translate technical findings clearly into Kannada.",
+            "ml": "Respond in Malayalam (മലയാളത്തിൽ മറുപടി നൽകുക). Translate technical findings clearly into Malayalam.",
             "es": "Responde en español.",
             "fr": "Répondez en français.",
-            "de": "Antworten Sie auf Deutsch.",
-            "zh": "用中文回答。",
-            "ja": "日本語で回答してください。",
-            "ko": "한국어로 답변하십시오.",
-            "ru": "Отвечайте на русском языке.",
-            "pt": "Responda em português.",
-            "it": "Rispondi in italiano."
+            "de": "Antworten Sie auf Deutsch."
         }
         
         return language_instructions.get(detected_lang, language_instructions["en"])
     
-    def should_translate_manuals(self, detected_lang: str) -> bool:
-        """
-        Determine if manuals should be translated based on detected language.
-        Returns False to avoid translating manuals as per requirements.
-        """
-        # Never translate manuals - always use original language
-        return False
-    
     def get_response_language(self, query: str) -> str:
-        """
-        Get the language to use for the response based on the query language.
-        """
         detected = self.detect_language(query)
         logger.info(f"Query language detected: {self.LANGUAGE_NAMES.get(detected, detected)}")
         return detected
 
 
-# Singleton instance
 language_service = LanguageService()

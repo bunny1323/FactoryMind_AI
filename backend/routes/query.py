@@ -21,6 +21,60 @@ router = APIRouter()
 LAST_ANSWERS: Dict[str, Dict[str, Any]] = {}
 
 
+@router.get("/debug/query")
+async def debug_query(
+    query: str,
+    machine_id: str = "M101",
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Debug endpoint to trace full pipeline without LLM synthesis."""
+    logger.info(f"=== DEBUG PIPELINE TRACE ===")
+    logger.info(f"QUERY: '{query}'")
+    logger.info(f"MACHINE ID: {machine_id}")
+
+    from agents.graph import agent_orchestrator
+    from backend.services.query_planner import query_planner
+    from backend.services.rag_service import rag_service
+
+    # Step 1: Query Planning
+    plan = query_planner.plan(query)
+    planning_info = {
+        "intent": plan.intent,
+        "rewritten_query": plan.rewritten_query,
+        "target_collections": plan.target_collections,
+        "is_conversational": plan.is_conversational,
+        "requires_visual": plan.requires_visual,
+        "metadata_filters": plan.metadata_filters
+    }
+
+    # Step 2: Retrieval
+    retrieval_results = rag_service.search_all_collections(query, top_k=10, user_id=current_user.get("uid"))
+    retrieval_info = {
+        "collections_searched": list(retrieval_results.keys()),
+        "total_hits": sum(len(hits) for hits in retrieval_results.values()),
+        "hits_by_collection": {coll: len(hits) for coll, hits in retrieval_results.items()},
+        "sample_hits": []
+    }
+
+    # Add sample hits from each collection
+    for coll, hits in retrieval_results.items():
+        for hit in hits[:2]:  # Top 2 hits per collection
+            retrieval_info["sample_hits"].append({
+                "collection": coll,
+                "score": hit.get("score"),
+                "title": hit.get("title", "")[:50],
+                "document": hit.get("payload", {}).get("document_name", "Unknown"),
+                "page": hit.get("payload", {}).get("page", "N/A")
+            })
+
+    return {
+        "debug_trace": {
+            "query_planning": planning_info,
+            "retrieval": retrieval_info
+        }
+    }
+
+
 @router.post("/query")
 async def run_query(
     req: QueryRequest,
@@ -29,8 +83,11 @@ async def run_query(
     """Execute query using multi-agent orchestrator."""
     query = req.query
     machine_id = req.machine_id
-    
-    logger.info(f"Received query: '{query}' for machine: {machine_id} by user: {current_user.get('uid')}")
+
+    logger.info(f"=== PIPELINE TRACE START ===")
+    logger.info(f"INCOMING QUERY: '{query}'")
+    logger.info(f"MACHINE ID: {machine_id}")
+    logger.info(f"USER ID: {current_user.get('uid')}")
     
     try:
         # Fetch active telemetry values for this machine

@@ -1,11 +1,10 @@
 """
 OCR Manager for FactoryMind AI Ingestion Pipeline.
-Robust OCR fallback chain with automatic dependency detection.
-Never crashes - always falls back gracefully.
+Clean, production-grade OCR pipeline with PyMuPDF native text extraction
+and PaddleOCR for scanned/fallback page processing.
 """
 import logging
-import inspect
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any
 from dataclasses import dataclass
 from PIL import Image
 import io
@@ -70,7 +69,6 @@ class PyMuPDFBackend(OCRBackend):
         self.dep_manager = get_dependency_manager()
     
     def _initialize_engine(self):
-        """PyMuPDF is already loaded via fitz."""
         if not self.dep_manager.is_available("pymupdf"):
             raise ImportError("PyMuPDF not available")
         import fitz
@@ -88,7 +86,7 @@ class PyMuPDFBackend(OCRBackend):
                 return OCRResult(
                     text=text.strip(),
                     engine="PyMuPDF",
-                    confidence=1.0,  # Native text is highest confidence
+                    confidence=1.0,
                     metadata={"method": "native_extraction"}
                 )
         except Exception as e:
@@ -97,93 +95,38 @@ class PyMuPDFBackend(OCRBackend):
         return None
 
 
-class DoclingBackend(OCRBackend):
-    """Docling OCR and layout analysis."""
-    
-    def __init__(self):
-        super().__init__("Docling")
-        self.dep_manager = get_dependency_manager()
-    
-    def _initialize_engine(self):
-        """Initialize Docling with version detection."""
-        if not self.dep_manager.is_available("docling"):
-            raise ImportError("Docling not available")
-        
-        # Try current API (simplified)
-        try:
-            from docling.document_converter import DocumentConverter
-            self.converter = DocumentConverter()
-            self.api_version = "current"
-        except Exception as e:
-            raise ImportError(f"Docling API not compatible: {e}")
-        
-        self.version = self.dep_manager.get_version("docling")
-    
-    def extract_text_from_bytes(self, pdf_bytes: bytes, page_num: int) -> Optional[OCRResult]:
-        """Extract text using Docling."""
-        if not self.available:
-            return None
-        
-        try:
-            import tempfile
-            
-            # Docling works with file paths
-            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                tmp.write(pdf_bytes)
-                tmp_path = tmp.name
-            
-            try:
-                result = self.converter.convert(tmp_path)
-                text = result.document.export_to_markdown()
-                
-                if text.strip():
-                    return OCRResult(
-                        text=text.strip(),
-                        engine="Docling",
-                        confidence=0.9,
-                        metadata={"api_version": self.api_version, "page": page_num}
-                    )
-            finally:
-                import os
-                os.unlink(tmp_path)
-                
-        except Exception as e:
-            logger.warning(f"Docling extraction failed: {e}")
-        
-        return None
-
-
 class PaddleOCRBackend(OCRBackend):
-    """PaddleOCR with automatic version detection."""
+    """PaddleOCR for fallback text extraction on scanned pages."""
     
     def __init__(self):
         super().__init__("PaddleOCR")
         self.dep_manager = get_dependency_manager()
     
     def _initialize_engine(self):
-        """Initialize PaddleOCR with version detection."""
         if not self.dep_manager.is_available("paddleocr"):
             raise ImportError("PaddleOCR not available")
         
+        import os
+        os.environ['FLAGS_use_mkldnn'] = '0'
+        os.environ['MKL_THREADING_LAYER'] = 'GNU'
+        
         from paddleocr import PaddleOCR
         
-        # Detect API version by inspecting the ocr method signature
-        ocr_signature = inspect.signature(PaddleOCR.ocr)
-        
-        # Check if 'cls' parameter exists in signature
-        has_cls_param = 'cls' in ocr_signature.parameters
-        
-        # Use new parameter name to avoid deprecation warning
         try:
-            self._engine = PaddleOCR(use_textline_orientation=True, lang='en')
-        except TypeError:
-            # Fallback for older versions
-            self._engine = PaddleOCR(use_angle_cls=True, lang='en')
+            self._engine = PaddleOCR(use_angle_cls=True, lang='en', show_log=False)
+            self.api_version = "v3_modern"
+            logger.info("PaddleOCR initialized with v3 modern API")
+        except Exception as e:
+            logger.warning(f"PaddleOCR modern API failed: {e}, trying simple API...")
+            try:
+                self._engine = PaddleOCR(lang='en', show_log=False)
+                self.api_version = "v3_simple"
+            except Exception as e2:
+                logger.error(f"All PaddleOCR initialization attempts failed: {e2}")
+                raise ImportError(f"PaddleOCR API not compatible: {e2}")
         
-        self.api_version = "new" if not has_cls_param else "old"
         self.version = self.dep_manager.get_version("paddleocr")
-        
-        logger.info(f"PaddleOCR API version: {self.api_version}")
+        logger.info(f"PaddleOCR version: {self.version}")
     
     def extract_text(self, image: Image.Image, **kwargs) -> Optional[OCRResult]:
         """Extract text using PaddleOCR."""
@@ -194,25 +137,26 @@ class PaddleOCRBackend(OCRBackend):
             import numpy as np
             img_np = np.array(image)
             
-            # Use appropriate API based on version
-            if self.api_version == "new":
-                # New API - no cls parameter
-                result = self._engine.ocr(img_np)
-            else:
-                # Old API - with cls parameter
+            if self.api_version == "v3_modern":
                 result = self._engine.ocr(img_np, cls=True)
+            else:
+                result = self._engine.ocr(img_np)
             
             txts = []
             if result and result[0]:
                 for line in result[0]:
-                    txts.append(line[1][0])
+                    if isinstance(line, (list, tuple)) and len(line) >= 2:
+                        if isinstance(line[1], (list, tuple)) and len(line[1]) >= 1:
+                            txts.append(line[1][0])
+                        elif isinstance(line[1], str):
+                            txts.append(line[1])
             
             if txts:
                 return OCRResult(
                     text=" ".join(txts),
                     engine="PaddleOCR",
                     confidence=0.85,
-                    metadata={"api_version": self.api_version}
+                    metadata={"api_version": self.api_version, "lines_detected": len(txts)}
                 )
         except Exception as e:
             logger.warning(f"PaddleOCR extraction failed: {e}")
@@ -220,102 +164,22 @@ class PaddleOCRBackend(OCRBackend):
         return None
 
 
-class EasyOCRBackend(OCRBackend):
-    """EasyOCR backend."""
-    
-    def __init__(self):
-        super().__init__("EasyOCR")
-        self.dep_manager = get_dependency_manager()
-    
-    def _initialize_engine(self):
-        """Initialize EasyOCR."""
-        if not self.dep_manager.is_available("easyocr"):
-            raise ImportError("EasyOCR not available")
-        
-        import easyocr
-        self._engine = easyocr.Reader(['en'])
-        self.version = self.dep_manager.get_version("easyocr")
-    
-    def extract_text(self, image: Image.Image, **kwargs) -> Optional[OCRResult]:
-        """Extract text using EasyOCR."""
-        if not self.available:
-            return None
-        
-        try:
-            import numpy as np
-            img_np = np.array(image)
-            
-            result = self._engine.readtext(img_np)
-            txts = [text for bbox, text, conf in result if conf > 0.5]
-            
-            if txts:
-                return OCRResult(
-                    text=" ".join(txts),
-                    engine="EasyOCR",
-                    confidence=0.8,
-                    metadata={"detections": len(result)}
-                )
-        except Exception as e:
-            logger.warning(f"EasyOCR extraction failed: {e}")
-        
-        return None
-
-
-class TesseractBackend(OCRBackend):
-    """Tesseract OCR backend."""
-    
-    def __init__(self):
-        super().__init__("Tesseract")
-        self.dep_manager = get_dependency_manager()
-    
-    def _initialize_engine(self):
-        """Initialize Tesseract."""
-        if not self.dep_manager.is_available("tesseract"):
-            raise ImportError("Tesseract not available")
-        
-        import pytesseract
-        self._engine = pytesseract
-        self.version = self.dep_manager.get_version("tesseract")
-    
-    def extract_text(self, image: Image.Image, **kwargs) -> Optional[OCRResult]:
-        """Extract text using Tesseract."""
-        if not self.available:
-            return None
-        
-        try:
-            text = self._engine.image_to_string(image, lang='eng')
-            if text.strip():
-                return OCRResult(
-                    text=text.strip(),
-                    engine="Tesseract",
-                    confidence=0.75,
-                    metadata={}
-                )
-        except Exception as e:
-            logger.warning(f"Tesseract extraction failed: {e}")
-        
-        return None
-
-
 class OCRManager:
     """
-    Main OCR Manager with robust fallback chain.
-    Priority: PyMuPDF → Docling → PaddleOCR → EasyOCR → Tesseract
+    OCR Manager supporting only PyMuPDF and PaddleOCR.
+    Priority: PyMuPDF -> PaddleOCR
     """
-    
+
     def __init__(self):
         self.dep_manager = get_dependency_manager()
         self.backends: Dict[str, OCRBackend] = {}
         self._initialize_backends()
-    
+
     def _initialize_backends(self):
-        """Initialize all available backends in priority order."""
+        """Initialize available backends in priority order."""
         backend_classes = [
             ("PyMuPDF", PyMuPDFBackend),
-            ("Docling", DoclingBackend),
             ("PaddleOCR", PaddleOCRBackend),
-            ("EasyOCR", EasyOCRBackend),
-            ("Tesseract", TesseractBackend),
         ]
         
         for name, backend_class in backend_classes:
@@ -325,8 +189,7 @@ class OCRManager:
     
     def extract_from_page(self, page, page_num: int, min_text_length: int = 50) -> OCRResult:
         """
-        Extract text from a PDF page with smart detection.
-        Skips OCR if native text is sufficient.
+        Extract text from a PDF page. Skips OCR if native text is sufficient.
         """
         logger.info(f"📄 Processing page {page_num}")
         
@@ -339,31 +202,14 @@ class OCRManager:
                 logger.info(f"  Page {page_num}: PyMuPDF ✓ (native text sufficient)")
                 return result
             elif result:
-                logger.info(f"  Page {page_num}: PyMuPDF text too short ({len(result.text)} chars), trying OCR...")
+                logger.info(f"  Page {page_num}: PyMuPDF text too short ({len(result.text)} chars), trying PaddleOCR...")
         
-        # Stage 2: Try Docling if available
-        docling_backend = self.backends.get("Docling")
-        if docling_backend and docling_backend.is_available():
-            logger.info(f"  Page {page_num}: Trying Docling...")
-            try:
-                # Get PDF bytes for Docling
-                pdf_bytes = page.parent.tobytes()
-                result = docling_backend.extract_text_from_bytes(pdf_bytes, page_num)
-                if result:
-                    logger.info(f"  Page {page_num}: Docling ✓")
-                    return result
-            except Exception as e:
-                logger.warning(f"  Page {page_num}: Docling ✗ ({e})")
-        else:
-            logger.info(f"  Page {page_num}: Docling skipped (not installed)")
-        
-        # Stage 3: Render page to image and try OCR backends
+        # Stage 2: Render page to image and try PaddleOCR
         try:
             pix = page.get_pixmap(dpi=200)
             img_bytes = pix.tobytes("png")
             image = Image.open(io.BytesIO(img_bytes))
             
-            # Try PaddleOCR
             paddle_backend = self.backends.get("PaddleOCR")
             if paddle_backend and paddle_backend.is_available():
                 logger.info(f"  Page {page_num}: Trying PaddleOCR...")
@@ -375,32 +221,6 @@ class OCRManager:
                     logger.info(f"  Page {page_num}: PaddleOCR ✗")
             else:
                 logger.info(f"  Page {page_num}: PaddleOCR skipped (not installed)")
-            
-            # Try EasyOCR
-            easyocr_backend = self.backends.get("EasyOCR")
-            if easyocr_backend and easyocr_backend.is_available():
-                logger.info(f"  Page {page_num}: Trying EasyOCR...")
-                result = easyocr_backend.extract_text(image)
-                if result:
-                    logger.info(f"  Page {page_num}: EasyOCR ✓")
-                    return result
-                else:
-                    logger.info(f"  Page {page_num}: EasyOCR ✗")
-            else:
-                logger.info(f"  Page {page_num}: EasyOCR skipped (not installed)")
-            
-            # Try Tesseract
-            tesseract_backend = self.backends.get("Tesseract")
-            if tesseract_backend and tesseract_backend.is_available():
-                logger.info(f"  Page {page_num}: Trying Tesseract...")
-                result = tesseract_backend.extract_text(image)
-                if result:
-                    logger.info(f"  Page {page_num}: Tesseract ✓")
-                    return result
-                else:
-                    logger.info(f"  Page {page_num}: Tesseract ✗")
-            else:
-                logger.info(f"  Page {page_num}: Tesseract skipped (not installed)")
             
         except Exception as e:
             logger.warning(f"  Page {page_num}: Image rendering failed: {e}")
@@ -444,9 +264,3 @@ def get_ocr_manager() -> OCRManager:
     if _ocr_manager is None:
         _ocr_manager = OCRManager()
     return _ocr_manager
-
-
-if __name__ == "__main__":
-    # Test the OCR manager
-    manager = OCRManager()
-    manager.print_status()

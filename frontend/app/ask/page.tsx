@@ -60,6 +60,13 @@ interface Message {
   queryId?: string;
   feedback?: "like" | "dislike" | null;
   imageUrl?: string;
+  retrievedImages?: Array<{
+    image_path: string;
+    caption?: string;
+    page?: number | string;
+    document?: string;
+    figure_number?: string;
+  }>;
 }
 
 const QUICK_ACTIONS = [
@@ -225,7 +232,8 @@ export default function AskPage() {
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           evidence: data.evidence,
           queryId: data.query_id,
-          imageUrl: data.image_url || undefined
+          imageUrl: data.image_url || undefined,
+          retrievedImages: data.retrieved_images || data.evidence?.retrieved_images || undefined
         };
         
         // Mark fallback responses for UI handling
@@ -556,13 +564,33 @@ export default function AskPage() {
                       ) : (
                         <p className="text-xs md:text-sm font-medium">{msg.text}</p>
                       )}
-                      {msg.role === "assistant" && msg.imageUrl && (
-                        <div className="relative w-full h-64 mt-3 rounded-xl overflow-hidden border border-brown-300/20 bg-white flex items-center justify-center p-2">
-                          <img
-                            src={msg.imageUrl}
-                            alt="Visual Schematic Answer"
-                            className="max-w-full max-h-full object-contain"
-                          />
+                      {msg.role === "assistant" && (msg.retrievedImages?.length || msg.imageUrl) && (
+                        <div className="mt-4 space-y-3">
+                          <h4 className="text-xs font-bold text-brown-900 flex items-center gap-1.5">
+                            <BookOpen className="w-3.5 h-3.5 text-brown-700" />
+                            Retrieved Visual Schematics ({msg.retrievedImages?.length || 1})
+                          </h4>
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                            {(msg.retrievedImages && msg.retrievedImages.length > 0 ? msg.retrievedImages : [{ image_path: msg.imageUrl! }]).map((img, i) => (
+                              <div key={i} className="rounded-xl overflow-hidden border border-brown-300/30 bg-white p-2.5 flex flex-col gap-2">
+                                <div className="relative w-full h-48 bg-slate-50 rounded-lg flex items-center justify-center overflow-hidden">
+                                  <img
+                                    src={img.image_path}
+                                    alt={img.caption || `Diagram ${i + 1}`}
+                                    className="max-w-full max-h-full object-contain"
+                                  />
+                                </div>
+                                <div className="text-[11px] text-brown-800 space-y-0.5">
+                                  <p className="font-bold line-clamp-1">{img.caption || `Schematic Figure ${i + 1}`}</p>
+                                  {img.page && (
+                                    <p className="text-[10px] text-brown-500 font-semibold">
+                                      {img.document ? `${img.document} • ` : ""}Page {img.page}
+                                    </p>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
                         </div>
                       )}
                     </div>

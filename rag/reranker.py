@@ -33,11 +33,34 @@ class CrossEncoderReranker(Reranker):
             for idx, score in enumerate(scores):
                 # Always normalize raw logit scores to 0-1 range using sigmoid.
                 normalized_score = float(1.0 / (1.0 + math.exp(-float(score))))
-                hits[idx]["score"] = round(normalized_score, 4)
+                # Blend cross-encoder score with existing score (which includes visual boost)
+                existing_score = hits[idx].get("score", 0.0)
+                blended = max(normalized_score, existing_score) if (
+                    hits[idx].get("payload", {}).get("chunk_type") == "image" or 
+                    bool(hits[idx].get("payload", {}).get("image_path"))
+                ) else normalized_score
+                hits[idx]["score"] = round(blended, 4)
                 hits[idx]["rerank_score"] = round(normalized_score, 4)
             
-            # Sort by rerank score
+            # Sort by score
             sorted_hits = sorted(hits, key=lambda x: x.get("score", 0.0), reverse=True)
+            
+            # Ensure visual chunks survive top_k cutoff if any were retrieved
+            visual_hits = [
+                h for h in hits 
+                if h.get("payload", {}).get("chunk_type") == "image" or bool(h.get("payload", {}).get("image_path"))
+            ]
+            if visual_hits and not any(
+                h.get("payload", {}).get("chunk_type") == "image" or bool(h.get("payload", {}).get("image_path"))
+                for h in sorted_hits[:top_k]
+            ):
+                # Guarantee at least 2 top visual chunks survive in top_k
+                non_visual = [
+                    h for h in sorted_hits 
+                    if not (h.get("payload", {}).get("chunk_type") == "image" or bool(h.get("payload", {}).get("image_path")))
+                ]
+                return (visual_hits[:2] + non_visual)[:top_k]
+
             return sorted_hits[:top_k]
         except Exception as e:
             logger.error(f"Error during CrossEncoder prediction: {e}")

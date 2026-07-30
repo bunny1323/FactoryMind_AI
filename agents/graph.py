@@ -137,11 +137,25 @@ def document_retrieval_agent_node(state: AgentState) -> dict[str, Any]:
     logger.info(f"Visual Intent Detected: {visual_intent}")
     boosted_count = 0
     for hit in flat_hits:
-        payload = hit.get("payload", {}) if hit.get("payload") else {}
-        if visual_intent and payload.get("image_path"):
-            hit["score"] = min(1.0, hit.get("score", 0.0) + 0.3)
+        payload = hit.get("payload", {}) if isinstance(hit.get("payload"), dict) else {}
+        # Check image_path, chunk_type, or image_url
+        is_image_chunk = (
+            payload.get("chunk_type") == "image" or 
+            bool(payload.get("image_path")) or 
+            bool(payload.get("image_url")) or
+            "image" in str(hit.get("text", "")).lower()
+        )
+        if visual_intent and is_image_chunk:
+            hit["score"] = min(1.0, hit.get("score", 0.0) + 0.35)
             boosted_count += 1
+            logger.info(f"  ⚡ BOOSTED IMAGE CHUNK: doc={payload.get('document_name','?')} page={payload.get('page','?')} path={payload.get('image_path')}")
+            
     logger.info(f"Boosted {boosted_count} chunks with images")
+
+    # Diagnostic logging of top candidate payloads
+    for idx, cand in enumerate(flat_hits[:10]):
+        pl = cand.get("payload", {}) if isinstance(cand.get("payload"), dict) else {}
+        logger.info(f"  Candidate [{idx+1}]: id={cand.get('id')} type={pl.get('chunk_type')} path={pl.get('image_path')} score={cand.get('score'):.4f}")
 
     # Rerank 50 down to top 10 using CrossEncoder
     logger.info(f"--- SUB-STAGE: CROSS-ENCODER RERANKING ---")
@@ -159,13 +173,26 @@ def document_retrieval_agent_node(state: AgentState) -> dict[str, Any]:
         payload = hit.get("payload", {}) or {}
         logger.info(
             f"  [{i+1}] doc={payload.get('document_name', hit.get('title','?'))[:50]} "
-            f"page={payload.get('page','?')} score={hit.get('score',0):.4f}"
+            f"page={payload.get('page','?')} type={payload.get('chunk_type','text')} score={hit.get('score',0):.4f}"
         )
     
-    # Filter to top 5 highest relevance chunks for LLM context
     top_5_chunks = reranked[:5]
     if not top_5_chunks:
         top_5_chunks = flat_hits[:5]
+
+    # Calculate metrics for Visual Retrieval Trace
+    qdrant_images = sum(1 for h in flat_hits if (h.get("payload", {}) or {}).get("chunk_type") == "image" or bool((h.get("payload", {}) or {}).get("image_path")))
+    qdrant_text = len(flat_hits) - qdrant_images
+    rerank_images = sum(1 for h in top_5_chunks if (h.get("payload", {}) or {}).get("chunk_type") == "image" or bool((h.get("payload", {}) or {}).get("image_path")))
+
+    logger.info(
+        f"\n========== VISUAL RETRIEVAL TRACE ==========\n"
+        f"Retrieved from Qdrant: Images={qdrant_images}, Text={qdrant_text}\n"
+        f"After Boosting:        Images={boosted_count}\n"
+        f"After Reranking:       Images={rerank_images}\n"
+        f"Selected Top Chunks:   Images={rerank_images}\n"
+        f"===========================================\n"
+    )
         
     return {
         "retrieved_documents": top_5_chunks,

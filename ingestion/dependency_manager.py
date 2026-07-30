@@ -94,6 +94,11 @@ class DependencyManager:
             # System dependency - check via command
             return self._detect_system_dependency(name, install_command, capabilities)
         
+        # PaddleOCR needs a deeper check — the package imports fine but
+        # silently fails if paddlepaddle (the inference engine) is absent.
+        if name == "paddleocr":
+            return self._detect_paddleocr(install_command, capabilities)
+        
         try:
             module = importlib.import_module(import_path)
             version = self._get_version(module, import_path)
@@ -141,6 +146,50 @@ class DependencyManager:
                 capabilities=capabilities
             )
     
+    def _detect_paddleocr(self, install_command: str, capabilities: list) -> DependencyInfo:
+        """Detect PaddleOCR with a real instantiation test.
+        
+        paddleocr 3.x imports fine even when paddlepaddle is missing,
+        so we need to actually try constructing the OCR object.
+        """
+        try:
+            import paddleocr  # noqa: F401 — verify package exists
+            version_str = getattr(paddleocr, "__version__", "installed")
+        except ImportError:
+            logger.debug("paddleocr package not found")
+            return DependencyInfo(
+                name="paddleocr",
+                installed=False,
+                install_command=install_command,
+                capabilities=capabilities
+            )
+        
+        # Now verify the inference backend (paddlepaddle) is importable
+        try:
+            import paddle  # noqa: F401
+            logger.debug("PaddleOCR + PaddlePaddle both available")
+            return DependencyInfo(
+                name="paddleocr",
+                installed=True,
+                version=version_str,
+                import_path="paddleocr",
+                install_command=install_command,
+                capabilities=capabilities
+            )
+        except ImportError as e:
+            logger.warning(
+                f"PaddleOCR package is installed but PaddlePaddle backend is missing: {e}\n"
+                f"  Install PaddlePaddle: pip install paddlepaddle"
+            )
+            return DependencyInfo(
+                name="paddleocr",
+                installed=False,
+                version=version_str,
+                import_path="paddleocr",
+                install_command="pip install paddlepaddle && pip install paddleocr",
+                capabilities=capabilities
+            )
+    
     def _get_version(self, module, import_path: str) -> Optional[str]:
         """Extract version from a module."""
         try:
@@ -150,14 +199,7 @@ class DependencyManager:
                 return str(module.version)
             elif import_path == "fitz":
                 # PyMuPDF
-                return str(fitz.version)
-            elif import_path == "paddleocr":
-                # PaddleOCR
-                try:
-                    from paddleocr import PaddleOCR
-                    return "installed"
-                except:
-                    return "unknown"
+                return str(module.version)
             else:
                 return "unknown"
         except Exception:

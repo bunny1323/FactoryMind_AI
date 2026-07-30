@@ -26,7 +26,8 @@ def main():
             public_img_dir="public/extracted_images",
             collection_name="manuals",
             user_id="default_user",
-            state_file="ingest_state.json"
+            state_file="ingest_state.json",
+            clear_state=True   # Always re-index to pick up pipeline improvements
         )
         
         print(f"\n✅ Manuals ingestion completed: {total_chunks} chunks indexed")

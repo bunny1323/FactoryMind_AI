@@ -95,12 +95,28 @@ class ImageExtractor:
         
         try:
             image_list = page.get_images()
+            logger.debug(f"Page {page_num}: found {len(image_list)} embedded raster image(s)")
             
             for img_index, img_info in enumerate(image_list):
                 try:
                     xref = img_info[0]
                     base_image = page.parent.extract_image(xref)
                     image_bytes = base_image["image"]
+                    
+                    # Get image dimensions early so we can filter tiny icons
+                    try:
+                        img_pil = Image.open(io.BytesIO(image_bytes))
+                        width, height = img_pil.size
+                    except Exception:
+                        width, height = 0, 0
+                    
+                    # Skip very small images (icons / decorative elements < 150x150)
+                    if width < 150 or height < 150:
+                        logger.debug(
+                            f"Skipping tiny raster image ({width}x{height}) "
+                            f"on page {page_num} index {img_index}"
+                        )
+                        continue
                     
                     # Generate hash for deduplication
                     img_hash = hashlib.md5(image_bytes).hexdigest()
@@ -117,17 +133,13 @@ class ImageExtractor:
                     with open(img_path, "wb") as f:
                         f.write(image_bytes)
                     
-                    # Get image dimensions
-                    img = Image.open(io.BytesIO(image_bytes))
-                    width, height = img.size
-                    
                     # Store reference
                     self.saved_hashes[img_hash] = f"/extracted_images/{img_filename}"
                     
                     metadata = ImageMetadata(
                         id=f"{filename}_p{page_num}_raster_{img_index}",
                         page=page_num,
-                        bbox=(0, 0, width, height),  # Full image bbox
+                        bbox=(0, 0, width, height),
                         image_path=f"/extracted_images/{img_filename}",
                         hash=img_hash,
                         width=width,
@@ -138,6 +150,7 @@ class ImageExtractor:
                     images.append(metadata)
                     self.stats["raster_images"] += 1
                     self.stats["total_extracted"] += 1
+                    logger.info(f"Extracted raster image {img_index} ({width}x{height}) from page {page_num}")
                     
                 except Exception as e:
                     logger.warning(f"Failed to extract raster image {img_index} from page {page_num}: {e}")
@@ -153,8 +166,10 @@ class ImageExtractor:
         
         try:
             drawings = page.get_drawings()
+            logger.debug(f"Page {page_num}: found {len(drawings)} vector drawing(s)")
             
-            if len(drawings) < 10:  # Skip pages with few drawings (likely not diagrams)
+            # Lower threshold: even 3+ drawings can form a technical diagram
+            if len(drawings) < 3:
                 return images
             
             # Calculate bounding box of all drawings
@@ -205,6 +220,10 @@ class ImageExtractor:
                             images.append(metadata)
                             self.stats["vector_diagrams"] += 1
                             self.stats["total_extracted"] += 1
+                            logger.info(
+                                f"Extracted vector diagram from page {page_num} "
+                                f"({int(clip.width)}x{int(clip.height)}, {len(drawings)} paths)"
+                            )
                         
                     except Exception as e:
                         logger.warning(f"Failed to rasterize vector diagram on page {page_num}: {e}")

@@ -127,7 +127,8 @@ def ingest_manuals(
     public_img_dir: str = "public/extracted_images",
     collection_name: str = "manuals",
     user_id: str = "default_user",
-    state_file: str = "ingest_state.json"
+    state_file: str = "ingest_state.json",
+    clear_state: bool = False
 ) -> int:
     """
     Main ingestion function using refactored modular components.
@@ -136,6 +137,13 @@ def ingest_manuals(
     logger.info("INITIALIZING INGESTION PIPELINE")
     logger.info("="*70)
     
+    if clear_state and os.path.exists(state_file):
+        try:
+            os.remove(state_file)
+            logger.info(f"Cleared existing state file: {state_file}")
+        except Exception as e:
+            logger.warning(f"Could not remove state file: {e}")
+
     dep_manager = get_dependency_manager()
     dep_manager.print_report()
     
@@ -343,7 +351,8 @@ def ingest_manuals(
                 "payload": payload
             })
             
-        report_generator.record_chunks(manual_report_data, len(final_chunks))
+        avg_chunk_size = int(sum(len(c["text"]) for c in final_chunks) / max(1, len(final_chunks)))
+        report_generator.record_chunks(manual_report_data, len(final_chunks), avg_chunk_size)
         
         upserted_count = 0
         if final_chunks:

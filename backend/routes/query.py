@@ -118,24 +118,42 @@ async def run_query(
             "llm_prompt": state.get("llm_prompt", "Prompt details not logged by agent.")
         }
         
-        # Find top image_url if visual intent is detected
-        image_url = None
+        # Collect all retrieved images from citations for multi-image response
+        retrieved_images = []
+        for doc in citations:
+            payload = doc.get("payload", {}) if isinstance(doc.get("payload"), dict) else {}
+            img_path = payload.get("image_path") or payload.get("image_url")
+            
+            # Also extract from text if chunk_type was merged during layout awareness
+            if not img_path and "[Image Path]:" in str(doc.get("text", "")):
+                import re
+                match = re.search(r"\[Image Path\]:\s*(\S+)", str(doc.get("text", "")))
+                if match:
+                    img_path = match.group(1)
+
+            if img_path and img_path not in [img["image_path"] for img in retrieved_images]:
+                retrieved_images.append({
+                    "image_path": img_path,
+                    "caption": payload.get("caption") or "Technical Diagram",
+                    "page": payload.get("page", "N/A"),
+                    "document": payload.get("document_name", "Manual"),
+                    "figure_number": payload.get("figure_number", ""),
+                    "confidence": doc.get("score", 0.90)
+                })
+
+        image_url = retrieved_images[0]["image_path"] if retrieved_images else None
         image_description = None
-        if has_visual_intent(query):
-            for doc in citations:
-                payload = doc.get("payload", {}) if doc.get("payload") else {}
-                if payload.get("image_path"):
-                    image_url = payload.get("image_path")
-                    # Generate image description using vision service
-                    try:
-                        from backend.services.vision_service import vision_service
-                        import os
-                        # Convert relative path to absolute path
-                        image_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "frontend", "public", image_url.lstrip("/"))
-                        image_description = vision_service.describe_image(image_path, prompt="Describe this technical diagram or figure in detail, including labels, components, and relationships.")
-                    except Exception as e:
-                        logger.warning(f"Failed to generate image description: {e}")
-                    break
+        if image_url and has_visual_intent(query):
+            try:
+                from backend.services.vision_service import vision_service
+                import os
+                abs_img_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "..", "frontend", "public", image_url.lstrip("/"))
+                image_description = vision_service.describe_image(abs_img_path, prompt="Describe this technical diagram or figure in detail, including labels, components, and relationships.")
+            except Exception as e:
+                logger.warning(f"Failed to generate image description: {e}")
+
+        # Attach retrieved_images to evidence bundle
+        evidence_bundle["retrieved_images"] = retrieved_images
 
         # Generate query ID and cache for PDF download
         query_id = str(uuid.uuid4())
@@ -152,6 +170,7 @@ async def run_query(
             "answer": state["final_answer"],
             "evidence": evidence_bundle,
             "image_url": image_url,
+            "retrieved_images": retrieved_images,
             "image_description": image_description
         }
     except Exception as e:

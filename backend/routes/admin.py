@@ -38,6 +38,41 @@ async def get_collection_status():
     }
 
 
+@router.get("/admin/inspect-qdrant")
+async def inspect_qdrant():
+    """Inspect Qdrant collection payloads and image chunk distribution."""
+    results = {}
+    try:
+        from backend.dependencies import container
+        vs = container.vector_store
+        if hasattr(vs, "client"):
+            for coll in ["manuals", "sop", "maintenance_logs", "error_codes", "spare_parts"]:
+                if vs.client.collection_exists(coll):
+                    info = vs.client.get_collection(coll)
+                    points, _ = vs.client.scroll(collection_name=coll, limit=10, with_payload=True)
+                    sample = []
+                    for p in points:
+                        pl = dict(p.payload or {})
+                        sample.append({
+                            "id": p.id,
+                            "chunk_type": pl.get("chunk_type"),
+                            "image_path": pl.get("image_path"),
+                            "caption": pl.get("caption"),
+                            "document_name": pl.get("document_name"),
+                            "page": pl.get("page"),
+                            "heading": pl.get("heading"),
+                            "payload_keys": list(pl.keys())
+                        })
+                    results[coll] = {
+                        "total_points": info.points_count,
+                        "sample_points": sample
+                    }
+        return results
+    except Exception as e:
+        logger.error(f"Failed to inspect Qdrant: {e}")
+        return {"error": str(e)}
+
+
 @router.get("/admin/graph/path")
 async def get_graph_path(machine_id: str = "M101", query: str = "pump vibration"):
     """Get knowledge graph nodes and edges for visual rendering."""

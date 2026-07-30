@@ -66,11 +66,15 @@ class QueryPlanner:
         if any(kw in q for kw in ["which machine", "what machine", "supported excavator", "excavator model"]):
             return "MACHINE_OVERVIEW"
 
-        # 3. Diagram / Image Requests
-        if any(kw in q for kw in ["show diagram", "hydraulic schematic", "wiring layout", "exploded view", "circuit diagram"]):
+        # 3. Diagram / Image / Figure Requests
+        if any(kw in q for kw in [
+            "show figure", "figure", "fig.", "fig ", "show diagram", "hydraulic schematic", 
+            "wiring layout", "exploded view", "circuit diagram", "schematic", "layout", 
+            "diagram", "illustration", "drawing", "flowchart", "flow chart"
+        ]):
             return "DIAGRAM_REQUEST"
 
-        if any(kw in q for kw in ["show image", "show picture", "look like", "view figure", "illustration"]):
+        if any(kw in q for kw in ["show image", "show picture", "look like", "view figure", "photo"]):
             return "IMAGE_REQUEST"
 
         # 4. Specific Component Intents
@@ -158,6 +162,11 @@ class QueryPlanner:
                 return f"Troubleshooting guide, failure diagnosis, cause and repair procedure for Hyundai R215L Smart Plus: {q}"
 
         elif intent == "DIAGRAM_REQUEST" or intent == "IMAGE_REQUEST":
+            # Extract specific figure identifier if present (e.g. "Figure 3-12", "Fig 4")
+            fig_match = re.search(r"(?i)\b(fig(?:ure|\.)?\s*\d+(?:[-.]\d+)?)\b", q)
+            if fig_match:
+                fig_ref = fig_match.group(1)
+                return f"{fig_ref} {fig_ref} image {fig_ref} illustration {fig_ref} diagram schematic figure"
             return f"{q} schematic diagram figure illustration layout component view"
 
         return q

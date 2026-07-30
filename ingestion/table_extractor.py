@@ -70,16 +70,28 @@ class TableExtractor:
         
         try:
             import pdfplumber
-            import fitz
-            
-            # Convert fitz page to pdfplumber
-            pdf_bytes = page.parent.tobytes()
             import io
+            
+            # Convert fitz page to pdfplumber — isolate per page to avoid
+            # pdfminer / pdfplumber internal errors crashing the whole job.
+            pdf_bytes = page.parent.tobytes()
             pdf_file = io.BytesIO(pdf_bytes)
             
             with pdfplumber.open(pdf_file) as pdf:
+                # Guard against off-by-one if pdfplumber sees fewer pages
+                if page_num - 1 >= len(pdf.pages):
+                    return tables
                 plumb_page = pdf.pages[page_num - 1]
-                extracted_tables = plumb_page.extract_tables()
+                
+                try:
+                    extracted_tables = plumb_page.extract_tables()
+                except BaseException as inner_e:   # pdfminer can raise non-Exception
+                    logger.warning(
+                        f"pdfplumber internal error on page {page_num} of '{filename}': "
+                        f"{type(inner_e).__name__}: {inner_e}"
+                    )
+                    self.stats["failed"] += 1
+                    return tables
                 
                 for idx, table in enumerate(extracted_tables):
                     if not table or not any(row for row in table):
@@ -108,8 +120,8 @@ class TableExtractor:
                     
                     logger.debug(f"Extracted table {idx} from page {page_num} using pdfplumber")
         
-        except Exception as e:
-            logger.warning(f"pdfplumber table extraction failed on page {page_num}: {e}")
+        except BaseException as e:
+            logger.warning(f"pdfplumber table extraction failed on page {page_num}: {type(e).__name__}: {e}")
             self.stats["failed"] += 1
         
         return tables

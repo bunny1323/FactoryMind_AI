@@ -89,6 +89,47 @@ export default function AskPage() {
   const [isDebugOpen, setIsDebugOpen] = useState(false);
   const [devMode, setDevMode] = useState(false);
   const [userName, setUserName] = useState("Engineer");
+  const [imageModalOpen, setImageModalOpen] = useState(false);
+  const [currentImage, setCurrentImage] = useState<{ src: string; caption?: string } | null>(null);
+  
+  // Resizable panel widths
+  const [leftPanelWidth, setLeftPanelWidth] = useState(288); // 72 * 4px = 288px (lg:w-72)
+  const [rightPanelWidth, setRightPanelWidth] = useState(384); // 96 * 4px = 384px (lg:w-96)
+  const [isResizingLeft, setIsResizingLeft] = useState(false);
+  const [isResizingRight, setIsResizingRight] = useState(false);
+
+  // Handle left panel resize
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isResizingLeft) {
+        const newWidth = e.clientX;
+        if (newWidth >= 200 && newWidth <= 500) {
+          setLeftPanelWidth(newWidth);
+        }
+      }
+      if (isResizingRight) {
+        const newWidth = window.innerWidth - e.clientX;
+        if (newWidth >= 200 && newWidth <= 600) {
+          setRightPanelWidth(newWidth);
+        }
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingLeft(false);
+      setIsResizingRight(false);
+    };
+
+    if (isResizingLeft || isResizingRight) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+    }
+
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizingLeft, isResizingRight]);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -386,8 +427,17 @@ export default function AskPage() {
       {/* 1. Left Sidebar: Dynamic Knowledge Base Details */}
       <div 
         data-lenis-prevent
-        className="w-full lg:w-72 bg-white border border-brown-300/30 rounded-3xl p-5 flex flex-col gap-5 shadow-sm shrink-0 h-full overflow-y-auto custom-scrollbar"
+        className="hidden lg:flex bg-white border border-brown-300/30 rounded-3xl p-5 flex-col gap-5 shadow-sm shrink-0 h-full overflow-y-auto custom-scrollbar relative"
+        style={{ width: `${leftPanelWidth}px` }}
       >
+        {/* Resize Handle */}
+        <div
+          className="absolute right-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-brown-400/50 transition-colors z-10"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            setIsResizingLeft(true);
+          }}
+        />
         <div>
           <h2 className="text-[10px] font-bold uppercase tracking-widest text-brown-300">Knowledge Base</h2>
           <h3 className="text-sm font-extrabold text-brown-900 mt-1">{stats.machine_model}</h3>
@@ -455,7 +505,7 @@ export default function AskPage() {
       </div>
 
       {/* 2. Main Chat Panel (ChatGPT layout) */}
-      <div className="flex-1 flex flex-col rounded-3xl bg-white border border-brown-300/30 overflow-hidden shadow-sm relative">
+      <div className="flex-1 min-w-0 flex flex-col rounded-3xl bg-white border border-brown-300/30 overflow-hidden shadow-sm relative">
         
         {/* Top Header */}
         <div className="px-6 py-4 border-b border-brown-300/10 flex items-center justify-between z-10 bg-white/85 backdrop-blur-md">
@@ -573,12 +623,18 @@ export default function AskPage() {
                           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                             {(msg.retrievedImages && msg.retrievedImages.length > 0 ? msg.retrievedImages : [{ image_path: msg.imageUrl! }]).map((img, i) => (
                               <div key={i} className="rounded-xl overflow-hidden border border-brown-300/30 bg-white p-2.5 flex flex-col gap-2">
-                                <div className="relative w-full h-48 bg-slate-50 rounded-lg flex items-center justify-center overflow-hidden">
+                                <div className="relative w-full h-48 bg-slate-50 rounded-lg flex items-center justify-center overflow-hidden cursor-pointer hover:bg-slate-100 transition-colors" onClick={() => {
+                                  setCurrentImage({ src: img.image_path, caption: img.caption || `Diagram ${i + 1}` });
+                                  setImageModalOpen(true);
+                                }}>
                                   <img
                                     src={img.image_path}
                                     alt={img.caption || `Diagram ${i + 1}`}
                                     className="max-w-full max-h-full object-contain"
                                   />
+                                  <div className="absolute inset-0 bg-black/0 hover:bg-black/10 transition-colors flex items-center justify-center opacity-0 hover:opacity-100">
+                                    <ExternalLink className="w-6 h-6 text-white drop-shadow-lg" />
+                                  </div>
                                 </div>
                                 <div className="text-[11px] text-brown-800 space-y-0.5">
                                   <p className="font-bold line-clamp-1">{img.caption || `Schematic Figure ${i + 1}`}</p>
@@ -785,8 +841,17 @@ export default function AskPage() {
       {/* 3. Right Sidebar: Grounded Explainability Source Panel */}
       <div 
         data-lenis-prevent
-        className="w-full lg:w-96 flex flex-col gap-5 shrink-0 h-full overflow-y-auto pr-1 custom-scrollbar"
+        className="hidden lg:flex flex-col gap-5 shrink-0 h-full overflow-y-auto pr-1 custom-scrollbar relative"
+        style={{ width: `${rightPanelWidth}px` }}
       >
+        {/* Resize Handle */}
+        <div
+          className="absolute left-0 top-0 bottom-0 w-1 cursor-col-resize hover:bg-brown-400/50 transition-colors z-10"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            setIsResizingRight(true);
+          }}
+        />
         
         {/* A. Retrieval Confidence Score */}
         <div className="rounded-3xl bg-white border border-brown-300/30 p-5 flex flex-col gap-4 shadow-sm">
@@ -839,7 +904,30 @@ export default function AskPage() {
           </div>
         </div>
 
-        {/* B. Live Telemetry Panel */}
+        {/* B. Knowledge Graph Path */}
+        {activeEvidence?.kg_path && activeEvidence.kg_path.length > 0 && (
+          <div className="rounded-3xl bg-white border border-brown-300/30 p-5 flex flex-col gap-4 shadow-sm">
+            <div className="flex items-center gap-2 pb-2 border-b border-brown-300/10">
+              <Network className="w-4.5 h-4.5 text-brown-700" />
+              <h3 className="text-xs font-bold uppercase tracking-wider text-brown-550">
+                Knowledge Graph Path
+              </h3>
+            </div>
+            <div className="space-y-2">
+              {activeEvidence.kg_path.map((edge, idx) => (
+                <div key={idx} className="flex items-center gap-2 text-xs bg-surface-alt/10 p-2.5 rounded-lg border border-brown-300/10">
+                  <span className="font-bold text-brown-900 truncate max-w-[30%]">{edge.source}</span>
+                  <ArrowRight className="w-3 h-3 text-brown-500 shrink-0" />
+                  <span className="text-[10px] font-bold text-orange-600 uppercase bg-orange-50 px-1.5 py-0.5 rounded shrink-0">{edge.relationship}</span>
+                  <ArrowRight className="w-3 h-3 text-brown-500 shrink-0" />
+                  <span className="font-bold text-brown-900 truncate max-w-[30%]">{edge.target}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* C. Live Telemetry Panel */}
         <div className="rounded-3xl bg-white border border-brown-300/30 p-5 flex flex-col gap-4 shadow-sm">
           <div className="flex items-center gap-2 pb-2 border-b border-brown-300/10">
             <Activity className="w-4.5 h-4.5 text-brown-700" />
@@ -954,6 +1042,46 @@ export default function AskPage() {
         </div>
 
       </div>
+
+      {/* Image Modal for Full-Size View */}
+      <AnimatePresence>
+        {imageModalOpen && currentImage && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            onClick={() => setImageModalOpen(false)}
+            className="fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4 backdrop-blur-sm"
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              onClick={(e) => e.stopPropagation()}
+              className="relative max-w-6xl max-h-[90vh] bg-white rounded-2xl overflow-hidden shadow-2xl"
+            >
+              <button
+                onClick={() => setImageModalOpen(false)}
+                className="absolute top-4 right-4 z-10 p-2 bg-black/50 hover:bg-black/70 rounded-full text-white transition-colors"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+              <div className="p-4 bg-brown-50 border-b border-brown-200">
+                <p className="text-sm font-bold text-brown-800">{currentImage.caption}</p>
+              </div>
+              <div className="p-4 bg-white">
+                <img
+                  src={currentImage.src}
+                  alt={currentImage.caption}
+                  className="max-w-full max-h-[75vh] object-contain mx-auto"
+                />
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
     </div>
   );
